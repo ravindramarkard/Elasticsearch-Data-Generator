@@ -1,109 +1,163 @@
 # Elasticsearch Data Generator — Product Requirements Document (PRD)
 
 ## Overview
-A browser-based tool to connect to an Elasticsearch cluster, inspect index mappings, generate synthetic documents that respect field types and rules, and run SQL queries with translation, execution, pagination (cursor), and result export.
+- Goal: A browser-based tool to generate, preview, and insert synthetic documents into Elasticsearch indices; query via Elasticsearch SQL; compare index schemas; and delete by query — with robust UX for tables and connections.
+- Audience: Developers and data engineers working with Elasticsearch on local or remote clusters.
+- Platform: React + TypeScript + Vite (Rolldown), strict TypeScript, ESLint.
 
-## Goals
-- Allow non-expert users to quickly generate valid data for indices.
-- Provide SQL editor with translation to DSL, execution, and cursor-based pagination.
-- Offer flexible field rules for date, geo, IP, string, and numeric types.
-- Enable viewing results as table or JSON and exporting to CSV.
+## Objectives
+- Create and manage Elasticsearch connections with saved entries unified under a single tab.
+- Generate sample data and perform bulk insert with progress and error reporting.
+- Provide an SQL-based editor for querying indices/data streams/patterns; allow CSV download.
+- Compare schemas between two indices.
+- Support delete-by-query with preview and task progress.
+- Ensure tables have proper alignment, sticky headers, horizontal/vertical scroll, and pagination.
+- Deliver a clear, pill-style tab UI with icons.
 
 ## Non-Goals
-- Managing index lifecycle (creation, ILM, templates).
-- Custom auth providers beyond Basic and API Key.
-- Server-side middleware or proxy; all requests are direct from the browser.
+- Server-side pagination; use client-side pagination for current scope.
+- External icon libraries; use emoji icons to avoid new deps.
+- Advanced auth flows (e.g., OAuth); support Basic and API Key.
 
-## Architecture Summary
-- Frontend: Vite + React + TypeScript.
-- No backend; uses `fetch` to call Elasticsearch REST APIs.
-- Data generation is deterministic per session using runtime RNG functions.
+## Personas
+- Developer: Needs quick local iteration and verification.
+- Data Engineer: Validates mappings, generates realistic data, runs ad-hoc queries.
 
-## Key Features
-### Connections
-- Create and save connections with `basic` or `apiKey` auth.
-- Test connection via `/_cat/health`.
-  - Code reference: `es-data-generator/src/esClient.ts:26-38` and `es-data-generator/src/App.tsx:118-130`.
+## Key Features & Acceptance Criteria
 
-### Mapping & Field Rules
-- Fetch mapping for an index and extract `properties`.
-  - Code reference: `es-data-generator/src/esClient.ts:40-52`, `es-data-generator/src/generator.ts:174-184`.
-- Add rules per field; rule options auto-filter by field type:
-  - Date: `format` (`iso` or `epoch_millis`), optional range (`start`, `end`), optional frequency inputs (granularity, distribution, rate).
-  - Geo Point: `latMin`, `latMax`, `lonMin`, `lonMax`.
-  - Geohash: `precision`.
-  - Geo City: select from local city dataset.
-  - IP: `v4` or `v6`.
-  - String (keyword/text): `prefix`, `phone`.
-  - Numeric (integer/float): `geo_number` with `axis` and `min/max` bounds.
-  - Manual: fixed value override.
-  - Code references: `es-data-generator/src/App.tsx:239-259`, `es-data-generator/src/App.tsx:260-300`, `es-data-generator/src/generator.ts:37-47`, `es-data-generator/src/generator.ts:79-88`, `es-data-generator/src/generator.ts:131-146`, `es-data-generator/src/generator.ts:104-118`.
+### 1) Connections (includes Saved)
+- Create a connection with name, URL, auth type (Basic, API Key) and credentials.
+- Saved connections appear below the form in the same tab; can select, update, test, and delete.
+- Acceptance:
+  - Saved connections render in `Connections` tab; select updates `selected` state.
+  - Test reports health status via `pingHealth`.
+  - Delete removes from storage and updates selection.
+- Code refs:
+  - `es-data-generator/src/App.tsx:344–425` (UI and saved section)
+  - `es-data-generator/src/storage.ts` (persistence)
+  - `es-data-generator/src/esClient.ts` (client ops)
 
-### Data Generation & Bulk Insert
-- Generate `count` documents that respect mapping types and rules; optional global date range.
-- Bulk insert in chunks using `/_bulk` NDJSON.
-  - Code references: `es-data-generator/src/generator.ts:166-172` (generate), `es-data-generator/src/esClient.ts:54-80` (bulk), UI at `es-data-generator/src/App.tsx:429-445`.
-- Note: The previous “Time-Based Generation” section was removed per request. Date rule frequency inputs remain in the rule UI but do not trigger time-based insertion.
+### 2) Schema Generator
+- Select index; set doc count and chunk size; configure time range; set per-field generation rules; preview sample docs (JSON or table); insert in bulk with progress.
+- Acceptance:
+  - Preview generates `N` docs respecting rules and date ranges.
+  - Toggle JSON/tree/table views; clear preview resets state.
+  - Bulk insert shows progress and final status.
+- Code refs:
+  - Preview/table: `es-data-generator/src/App.tsx:872–916`
+  - Bulk insert: `es-data-generator/src/App.tsx:919–951` and `es-data-generator/src/esClient.ts`
+  - Rules utilities: `es-data-generator/src/generator.ts`
 
-### SQL Editor
-- Translation: `POST /_sql/translate` to preview DSL.
-- Execution: `POST /_sql` with `fetch_size`.
-- Pagination: `POST /_sql` with `cursor` to retrieve next pages.
-- Cursor close: `POST /_sql/close`.
-- Views: Table and JSON view toggle.
-- Export: Download CSV with proper escaping of quotes, commas, and newlines.
-- Examples: Predefined SQL snippets selectable from dropdown.
-  - Code references: `es-data-generator/src/esClient.ts:95-156`, `es-data-generator/src/App.tsx:557-616`.
+### 3) Elasticsearch Editor (Using SQL Query)
+- Rename tab and section to "Elasticsearch Editor (Using SQL Query)".
+- Choose source type (index/data stream/pattern), compose SQL, fetch results, toggle JSON/tree/table views, and download CSV.
+- Acceptance:
+  - Results table paginates; CSV download contains the current result set.
+  - JSON view includes tree mode with filter and expand/collapse.
+- Code refs:
+  - Tab/button: `es-data-generator/src/App.tsx:336–342`
+  - Results table + pagination: `es-data-generator/src/App.tsx:1296–1328`
+  - CSV export: `es-data-generator/src/App.tsx:1386–1412`
 
-## APIs Used
-- `GET /_cat/health`
-- `GET /{index}/_mapping`
-- `POST /_bulk`
-- `POST /_sql/translate`
-- `POST /_sql`
-- `POST /_sql/close`
+### 4) Compare Schemas
+- Appears after the SQL tab; lets user pick two indices and shows added/removed/type changes.
+- Acceptance:
+  - Correct ordering in tab bar.
+  - Type changes render in a table with stable scroll.
+- Code refs:
+  - Tab order: `es-data-generator/src/App.tsx:336–342`
+  - Compare UI: `es-data-generator/src/App.tsx:1083–1151`
 
-## UI Details
-- Sections: Connections, Schema Generator, Field Rules, SQL.
-- CSV export uses `Blob` + `URL.createObjectURL` with escaping.
-- Auth headers: `Basic` or `ApiKey` depending on connection.
+### 5) Delete By Query
+- Enter JSON query, select index, preview affected docs (JSON/tree/table), run delete task and show progress.
+- Acceptance:
+  - Preview paginated; table scroll works; progress bar updates during delete.
+- Code refs:
+  - Preview table + pagination: `es-data-generator/src/App.tsx:1519–1560`
+  - Task progress: `es-data-generator/src/App.tsx:1533–1535`
 
-## Data Types & Rule Mapping
-- Date: ISO or epoch millis; range respected in generation.
-- Geo Point: object `{ lat, lon }` inside specified bounds or from city dataset; geohash string supported.
-- IP: IPv4 or IPv6.
-- String (keyword/text): random strings, prefix, phone.
-- Numeric: bounded values via `geo_number` rule.
-- Object: recursively generated based on nested `properties`.
+### 6) Table UX
+- Sticky headers, nowrap headers, horizontal/vertical scroll, compact mode, and client-side pagination controls (Prev/Next, page size).
+- Acceptance:
+  - Tables stay within page with scrollbars.
+  - Pagination defaults sensible and adjustable.
+- Code refs:
+  - CSS scroll/sticky: `es-data-generator/src/App.css:90–118`
+  - Pagination controls: Preview `es-data-generator/src/App.tsx:898–914`, SQL `es-data-generator/src/App.tsx:1316–1328`, Delete `es-data-generator/src/App.tsx:1542–1560`
 
-## Pagination Behavior
-- Initial execution returns `rows`, `columns`, optional `cursor`.
-- “Next Page” appends rows until no cursor is returned.
-- “Close Cursor” clears server-side cursor and UI state.
+### 7) Tab UI Styling
+- Pill-style tab container with icons and active state; dark theme consistent.
+- Acceptance:
+  - Tabs show icons; active tab styled as white pill; hover/focus states.
+- Code refs:
+  - Styles: `es-data-generator/src/App.css:171–206`
+  - Buttons: `es-data-generator/src/App.tsx:336–342`
 
-## Error Handling
-- Network/HTTP errors surfaced in UI status areas.
-- Mapping extraction guards against missing `properties`.
-- CSV export avoids malformed fields via quote escaping.
+## Functional Requirements
+- Connection management with persistence.
+- Data generation supports date/geo/ip/number/string rules per field.
+- Real-time mode to simulate sequential inserts with state updates.
+- SQL editor supports source selection and default LIMIT based on fetch size.
+- Delete-by-query preview before execution.
 
-## Security Considerations
-- No secrets persisted beyond local connection storage.
-- TLS is enforced by the browser; self-signed certs must be trusted at OS level.
-- No proxy; CORS must be configured on Elasticsearch.
+## Non-Functional Requirements
+- Performance: Client-side pagination; sticky header rendering must remain responsive on 1k rows.
+- Accessibility: Keyboard focus outlines; sticky headers with clear contrast.
+- Security: Do not log secrets; rely on browser TLS; basic/apiKey only.
 
-## Acceptance Criteria
-- User can connect, fetch mapping, set field rules filtered by type.
-- User can generate and bulk insert documents without errors.
-- User can translate and execute SQL, paginate with cursors, close cursor.
-- User can toggle table/JSON view and export valid CSV.
-- Lint/typecheck/build succeed.
+## Technical Constraints
+- React `^19.2.0`, TypeScript `~5.9.3`, Vite `rolldown-vite@7.2.5`.
+- Strict TypeScript via `tsconfig.app.json`.
+- ESLint `^9` configured; run lint/typecheck on changes.
+- No new UI libraries for icons.
 
-## Testing
-- Manual tests: connection health, mapping fetch, rule application for each type, bulk insert success, SQL translation/execution/pagination, CSV export.
-- Build verification via `npm run lint` and `npm run build`.
+## Development Setup (Cursor)
+- Commands:
+  - `npm run dev` — start local dev server.
+  - `npm run lint` — lint check.
+  - `npm run typecheck` — TypeScript diagnostics.
+  - `npm run build` — production build.
+- Working directory: `es-data-generator`.
+- Structure awareness:
+  - Main app component: `src/App.tsx`.
+  - Styles: `src/App.css`.
+  - ES client helpers: `src/esClient.ts`.
+  - Data generation: `src/generator.ts`.
+  - Storage utilities: `src/storage.ts`.
 
-## Future Enhancements
-- Preset date ranges (e.g., “Past 1 day”).
-- Larger city dataset or CSV import for custom cities.
-- Saved rule profiles per index.
-- Optional server-side proxy for secured clusters.
+## User Stories
+- As a developer, I can save an ES connection and quickly test it before use.
+- As a data engineer, I can preview synthetic docs and insert them in bulk with progress.
+- As a user, I can query with Elasticsearch SQL and view results in paginated tables or JSON.
+- As a user, I can compare two index schemas and see changes.
+- As a user, I can preview delete-by-query results and track deletion progress.
+
+## Acceptance Tests (High-Level)
+- Connections:
+  - Save and select a connection; test returns health.
+  - Update persisted auth type and URL; delete updates selection.
+- Schema Generator:
+  - Preview shows `N` docs; toggle views; clear resets.
+  - Bulk insert reports progress and final counts.
+- SQL Editor:
+  - Default SQL uses LIMIT from fetch size; results paginate; CSV downloads.
+- Compare Schemas:
+  - Tab order correct; added/removed/type changes display in lists/table.
+- Delete:
+  - Preview paginates; progress bar shows during deletion; final status reported.
+- Table UX:
+  - Headers sticky; horizontal/vertical scroll; compact spacing toggles.
+
+## Future Enhancements (Optional)
+- Server-side pagination for very large result sets.
+- Persist user-preferred page sizes.
+- Row filtering/search on tables.
+
+## Risks & Mitigations
+- Large datasets in the browser: mitigate with client-side pagination and LIMITs.
+- TLS constraints in browser: document that self-signed certs must be trusted at OS level.
+
+## Definition of Done
+- Features implemented as specified.
+- `npm run lint` and `npm run typecheck` pass.
+- Manual checks across tabs verify pagination, scroll behavior, and tab UI.
