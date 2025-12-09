@@ -331,6 +331,17 @@ function App() {
   const [auditFilter, setAuditFilter] = useState<string>('');
   const [auditCategoryFilter, setAuditCategoryFilter] = useState<string>('all');
   const [auditStatusFilter, setAuditStatusFilter] = useState<string>('all');
+  // Import Data state
+  const [importIndex, setImportIndex] = useState<string>('');
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importData, setImportData] = useState<Record<string, unknown>[]>([]);
+  const [importHeaders, setImportHeaders] = useState<string[]>([]);
+  const [importStatus, setImportStatus] = useState<string>('');
+  const [importProgress, setImportProgress] = useState<number>(0);
+  const [importInProgress, setImportInProgress] = useState<boolean>(false);
+  const [importErrors, setImportErrors] = useState<Array<{ row: number; error: string; data: Record<string, unknown> }>>([]);
+  const [importSuccessCount, setImportSuccessCount] = useState<number>(0);
+  const [importFailCount, setImportFailCount] = useState<number>(0);
 
   function logAudit(action: string, category: AuditEntry['category'], details: string, status: AuditEntry['status'] = 'success', metadata?: Record<string, unknown>) {
     const entry: AuditEntry = {
@@ -348,6 +359,107 @@ function App() {
 
   function quoteIdent(name: string): string {
     return `"${name}"`;
+  }
+
+  // CSV Parser
+  function parseCSV(text: string): { headers: string[]; rows: Record<string, unknown>[] } {
+    const lines = text.split(/\r?\n/).filter(line => line.trim());
+    if (lines.length === 0) return { headers: [], rows: [] };
+    
+    // Parse CSV with quote handling
+    function parseLine(line: string): string[] {
+      const result: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        const nextChar = line[i + 1];
+        
+        if (char === '"') {
+          if (inQuotes && nextChar === '"') {
+            current += '"';
+            i++; // Skip next quote
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    }
+    
+    const headers = parseLine(lines[0]);
+    const rows: Record<string, unknown>[] = [];
+    
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseLine(lines[i]);
+      if (values.length !== headers.length) continue; // Skip malformed rows
+      
+      const row: Record<string, unknown> = {};
+      headers.forEach((header, index) => {
+        let value: unknown = values[index];
+        // Try to parse numbers
+        if (value && typeof value === 'string') {
+          const trimmed = value.trim();
+          if (trimmed === 'true') value = true;
+          else if (trimmed === 'false') value = false;
+          else if (trimmed === 'null' || trimmed === '') value = null;
+          else if (!isNaN(Number(trimmed)) && trimmed !== '') value = Number(trimmed);
+        }
+        row[header] = value;
+      });
+      rows.push(row);
+    }
+    
+    return { headers, rows };
+  }
+
+  // Excel Parser (basic XLSX support using browser APIs)
+  async function parseExcel(_file: File): Promise<{ headers: string[]; rows: Record<string, unknown>[] }> {
+    try {
+      // For now, we'll inform users to convert to CSV
+      // Full Excel parsing would require adding the 'xlsx' library
+      throw new Error('Excel files not yet supported. Please convert to CSV format.');
+    } catch (e) {
+      throw e;
+    }
+  }
+
+  async function handleFileUpload(file: File) {
+    setImportFile(file);
+    setImportStatus('Parsing file...');
+    setImportData([]);
+    setImportHeaders([]);
+    setImportErrors([]);
+    
+    try {
+      let result: { headers: string[]; rows: Record<string, unknown>[] };
+      
+      if (file.name.endsWith('.csv')) {
+        const text = await file.text();
+        result = parseCSV(text);
+      } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        result = await parseExcel(file);
+      } else {
+        setImportStatus('Error: Unsupported file format. Please use CSV or Excel files.');
+        return;
+      }
+      
+      setImportHeaders(result.headers);
+      setImportData(result.rows);
+      setImportStatus(`Parsed successfully: ${result.rows.length} rows, ${result.headers.length} columns`);
+      logAudit('Parse Import File', 'system', `Parsed ${file.name}: ${result.rows.length} rows, ${result.headers.length} columns`, 'success', { fileName: file.name, rowCount: result.rows.length });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setImportStatus(`Error: ${msg}`);
+      logAudit('Parse Import File', 'system', `Failed to parse ${file.name}: ${msg}`, 'error', { fileName: file.name });
+    }
   }
   function applyDefaultSqlFrom(value: string) {
     if (!value) return;
@@ -418,7 +530,7 @@ function App() {
   const [cmpAdded, setCmpAdded] = useState<string[]>([]);
   const [cmpRemoved, setCmpRemoved] = useState<string[]>([]);
   const [cmpChanged, setCmpChanged] = useState<TypeChange[]>([]);
-  const [activeTab, setActiveTab] = useState<'connections' | 'schema' | 'compare' | 'sql' | 'update' | 'delete' | 'audit'>('connections');
+  const [activeTab, setActiveTab] = useState<'connections' | 'schema' | 'compare' | 'sql' | 'update' | 'delete' | 'audit' | 'import'>('connections');
   const [delIndex, setDelIndex] = useState<string>('');
   const [delQueryText, setDelQueryText] = useState<string>('');
   const [delExampleId, setDelExampleId] = useState<string>('');
@@ -585,6 +697,7 @@ function App() {
         <button className={activeTab === 'update' ? 'tab active' : 'tab'} onClick={() => setActiveTab('update')}><span className="tab-icon">✏️</span><span>Update By Query</span></button>
         <button className={activeTab === 'delete' ? 'tab active' : 'tab'} onClick={() => setActiveTab('delete')}><span className="tab-icon">🗑️</span><span>Delete By Query</span></button>
         <button className={activeTab === 'audit' ? 'tab active' : 'tab'} onClick={() => setActiveTab('audit')}><span className="tab-icon">📋</span><span>Audit</span></button>
+        <button className={activeTab === 'import' ? 'tab active' : 'tab'} onClick={() => setActiveTab('import')}><span className="tab-icon">📤</span><span>Import Data</span></button>
       </div>
 
       {activeTab === 'connections' && (
@@ -2717,6 +2830,223 @@ function App() {
             </div>
           </>
         )}
+      </section>
+      )}
+
+      {activeTab === 'import' && (
+      <section>
+        <div className="section-header">
+          <h2>Import Data from CSV/Excel</h2>
+        </div>
+        
+        <div className="row">
+          <div className="col">
+            <SearchableSelect
+              label="Target Index"
+              value={importIndex}
+              onChange={setImportIndex}
+              options={indices}
+              placeholder="Type to search indices..."
+            />
+          </div>
+        </div>
+
+        <div className="row">
+          <div className="col">
+            <label>Upload File (CSV or Excel)</label>
+            <input 
+              type="file" 
+              accept=".csv,.xlsx,.xls"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  handleFileUpload(file);
+                }
+              }}
+              style={{ padding: '0.5rem', cursor: 'pointer' }}
+            />
+          </div>
+        </div>
+
+        {importFile && (
+          <div className="row">
+            <div className="col">
+              <pre className="result">
+                📄 File: {importFile.name} ({(importFile.size / 1024).toFixed(2)} KB)
+              </pre>
+            </div>
+          </div>
+        )}
+
+        <pre className="result">{importStatus}</pre>
+
+        {importData.length > 0 && (
+          <>
+            <h3>Data Preview ({importData.length} rows)</h3>
+            <div className="row">
+              <div className="col">
+                <div className="table-wrap" style={{ maxHeight: '400px' }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        {importHeaders.map((header, i) => (
+                          <th key={i}>{header}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importData.slice(0, 100).map((row, i) => (
+                        <tr key={i}>
+                          {importHeaders.map((header, j) => (
+                            <td key={j}>{JSON.stringify(row[header])}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {importData.length > 100 && (
+                  <p style={{ fontSize: '0.85em', color: '#9aa4b2', marginTop: '0.5em' }}>
+                    Showing first 100 rows. Total: {importData.length} rows
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="row">
+              <button 
+                disabled={!selected || !importIndex || importInProgress || importData.length === 0}
+                onClick={async () => {
+                  if (!selected || !importIndex || importData.length === 0) return;
+                  
+                  setImportInProgress(true);
+                  setImportProgress(0);
+                  setImportErrors([]);
+                  setImportSuccessCount(0);
+                  setImportFailCount(0);
+                  setImportStatus('Inserting data...');
+
+                  try {
+                    const res = await bulkInsert(selected, importIndex, importData, 1000, {
+                      onProgress: (info) => {
+                        const pct = info.total > 0 ? Math.floor((info.processed / info.total) * 100) : 0;
+                        setImportProgress(pct);
+                        setImportSuccessCount(info.succeeded);
+                        setImportFailCount(info.failed);
+                        setImportStatus(`Uploading ${info.processed}/${info.total} (chunk ${info.chunkIndex + 1}/${info.chunkCount})…`);
+                      },
+                    });
+
+                    setImportInProgress(false);
+                    
+                    if (!res.ok) {
+                      setImportStatus(`Error: ${res.error || `HTTP ${res.status}`}`);
+                      logAudit('Import Data', 'generation', `Failed to import ${importData.length} rows to ${importIndex}: ${res.error}`, 'error', { rowCount: importData.length, index: importIndex, fileName: importFile?.name });
+                      return;
+                    }
+
+                    const succeeded = res.succeeded ?? importSuccessCount;
+                    const failed = res.failed ?? importFailCount;
+                    
+                    // Collect errors from response
+                    if (res.errors && Array.isArray(res.errors)) {
+                      const errorList = res.errors.map((err: any, idx: number) => ({
+                        row: idx + 1,
+                        error: err.error?.reason || err.error || 'Unknown error',
+                        data: importData[idx] || {}
+                      }));
+                      setImportErrors(errorList);
+                    }
+
+                    setImportProgress(100);
+                    setImportStatus(`✅ Import complete: ${succeeded} succeeded, ${failed} failed`);
+                    logAudit('Import Data', 'generation', `Imported data from ${importFile?.name} to ${importIndex}: ${succeeded} succeeded, ${failed} failed`, failed > 0 ? 'warning' : 'success', { succeeded, failed, index: importIndex, fileName: importFile?.name });
+                  } catch (e) {
+                    const msg = e instanceof Error ? e.message : 'Unknown error';
+                    setImportInProgress(false);
+                    setImportStatus(`Error: ${msg}`);
+                    logAudit('Import Data', 'generation', `Import failed: ${msg}`, 'error', { fileName: importFile?.name });
+                  }
+                }}
+              >
+                📤 Insert Data to Index
+              </button>
+              <button 
+                onClick={() => {
+                  setImportFile(null);
+                  setImportData([]);
+                  setImportHeaders([]);
+                  setImportErrors([]);
+                  setImportStatus('');
+                  setImportProgress(0);
+                  setImportSuccessCount(0);
+                  setImportFailCount(0);
+                }}
+              >
+                🗑️ Clear
+              </button>
+            </div>
+
+            {importInProgress && (
+              <div className="row">
+                <div className="col">
+                  <div style={{ width: '100%', height: '8px', background: '#eee', borderRadius: '4px' }}>
+                    <div style={{ width: `${importProgress}%`, height: '8px', background: '#3b82f6', borderRadius: '4px', transition: 'width 0.3s' }} />
+                  </div>
+                  <p style={{ fontSize: '0.9em', color: '#9aa4b2', marginTop: '0.5em' }}>
+                    Progress: {importProgress}% • Success: {importSuccessCount} • Failed: {importFailCount}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {importErrors.length > 0 && (
+              <>
+                <h3 style={{ color: '#e74c3c' }}>Errors ({importErrors.length})</h3>
+                <div className="row">
+                  <div className="col">
+                    <div className="table-wrap" style={{ maxHeight: '300px' }}>
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Row #</th>
+                            <th>Error</th>
+                            <th>Data</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {importErrors.map((err, i) => (
+                            <tr key={i} style={{ background: '#fff3f3' }}>
+                              <td>{err.row}</td>
+                              <td style={{ color: '#e74c3c' }}>{err.error}</td>
+                              <td style={{ maxWidth: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.85em' }}>
+                                {JSON.stringify(err.data, null, 2)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </>
+        )}
+
+        <div style={{ marginTop: '2em', padding: '1em', background: '#f8f9fa', borderRadius: '4px' }}>
+          <h3 style={{ marginTop: 0 }}>💡 Tips</h3>
+          <ul style={{ margin: 0, paddingLeft: '1.5em', fontSize: '0.9em', color: '#666' }}>
+            <li>CSV files should have headers in the first row</li>
+            <li>Column names will be used as field names in Elasticsearch</li>
+            <li>Numeric values will be automatically detected and converted</li>
+            <li>Boolean values (true/false) will be converted to boolean type</li>
+            <li>Empty cells will be stored as null</li>
+            <li>For Excel files, please convert to CSV format first</li>
+            <li>Large files will be uploaded in chunks for better performance</li>
+            <li>Check the error table below for any failed insertions</li>
+          </ul>
+        </div>
       </section>
       )}
 
