@@ -10,6 +10,18 @@ export type Connection = {
   apiKey?: string;
 };
 
+// Helper to convert ES URL to use Vite proxy in development
+function getProxiedUrl(url: string): string {
+  // In development, use the Vite proxy to avoid CORS issues
+  if (import.meta.env.DEV) {
+    // Remove the protocol and host, keep only the path
+    // e.g., "https://10.142.2.45:9200" becomes "/es-proxy"
+    return '/es-proxy';
+  }
+  // In production, use the actual URL
+  return url;
+}
+
 function buildHeaders(conn: Connection): HeadersInit {
   const headers: Record<string, string> = {
     'Accept': 'text/plain,application/json',
@@ -25,7 +37,8 @@ function buildHeaders(conn: Connection): HeadersInit {
 
 export async function pingHealth(conn: Connection): Promise<{ ok: boolean; status: number; body?: string; error?: string }> {
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_cat/health`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_cat/health`, {
       method: 'GET',
       headers: buildHeaders(conn),
     });
@@ -39,7 +52,8 @@ export async function pingHealth(conn: Connection): Promise<{ ok: boolean; statu
 
 export async function fetchMapping(conn: Connection, index: string): Promise<{ ok: boolean; status: number; json?: unknown; error?: string }> {
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/${encodeURIComponent(index)}/_mapping`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_mapping`, {
       method: 'GET',
       headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
     });
@@ -53,7 +67,8 @@ export async function fetchMapping(conn: Connection, index: string): Promise<{ o
 
 export async function listIndices(conn: Connection): Promise<{ ok: boolean; status: number; names?: string[]; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_cat/indices?format=json&h=index`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_cat/indices?format=json&h=index`, {
       method: 'GET',
       headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
     });
@@ -73,7 +88,8 @@ export async function listIndices(conn: Connection): Promise<{ ok: boolean; stat
 
 export async function listDataStreams(conn: Connection): Promise<{ ok: boolean; status: number; names?: string[]; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_data_stream`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_data_stream`, {
       method: 'GET',
       headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
     });
@@ -104,7 +120,7 @@ export async function bulkInsert(
   chunkSize = 1000,
   options?: { onProgress?: (info: { processed: number; total: number; chunkIndex: number; chunkCount: number; succeeded: number; failed: number }) => void; signal?: AbortSignal; maxRetries?: number; initialDelayMs?: number }
 ): Promise<{ ok: boolean; status: number; errors?: boolean; items?: number; succeeded?: number; failed?: number; error?: string }>{
-  const base = conn.url.replace(/\/$/, '');
+  const base = getProxiedUrl(conn.url).replace(/\/$/, '');
   const total = docs.length;
   const maxBulk = 10000;
   const cs = Math.min(Math.max(1, chunkSize), maxBulk);
@@ -220,7 +236,8 @@ export type SqlExecResponse = {
 
 export async function translateSql(conn: Connection, sql: string): Promise<{ ok: boolean; status: number; json?: SqlTranslateResult; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_sql/translate`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_sql/translate`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ query: sql }),
@@ -236,7 +253,8 @@ export async function translateSql(conn: Connection, sql: string): Promise<{ ok:
 
 export async function executeSql(conn: Connection, sql: string, fetchSize = 50): Promise<{ ok: boolean; status: number; json?: SqlExecResponse; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_sql`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_sql`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ query: sql, fetch_size: fetchSize }),
@@ -252,7 +270,8 @@ export async function executeSql(conn: Connection, sql: string, fetchSize = 50):
 
 export async function nextSqlPage(conn: Connection, cursor: string): Promise<{ ok: boolean; status: number; json?: SqlExecResponse; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_sql`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_sql`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ cursor }),
@@ -268,7 +287,8 @@ export async function nextSqlPage(conn: Connection, cursor: string): Promise<{ o
 
 export async function closeSqlCursor(conn: Connection, cursor: string): Promise<{ ok: boolean; status: number; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_sql/close`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_sql/close`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify({ cursor }),
@@ -287,7 +307,8 @@ export async function searchPreview(
   body: unknown
 ): Promise<{ ok: boolean; status: number; json?: unknown; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/${encodeURIComponent(index)}/_search`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_search`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(body ?? {}),
@@ -307,7 +328,8 @@ export async function deleteByQuery(
   body: unknown
 ): Promise<{ ok: boolean; status: number; json?: unknown; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/${encodeURIComponent(index)}/_delete_by_query`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_delete_by_query`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(body ?? {}),
@@ -328,6 +350,7 @@ export type DeleteTaskStatus = {
   status?: {
     total?: number;
     deleted?: number;
+    updated?: number; // for update_by_query operations
     batches?: number;
     version_conflicts?: number;
     noops?: number;
@@ -337,7 +360,8 @@ export type DeleteTaskStatus = {
 
 export async function cancelTask(conn: Connection, taskId: string): Promise<{ ok: boolean; status: number; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_tasks/${encodeURIComponent(taskId)}/_cancel`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_tasks/${encodeURIComponent(taskId)}/_cancel`, {
       method: 'POST',
       headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
     });
@@ -351,7 +375,8 @@ export async function cancelTask(conn: Connection, taskId: string): Promise<{ ok
 
 export async function getTask(conn: Connection, taskId: string): Promise<{ ok: boolean; status: number; json?: DeleteTaskStatus; error?: string }>{
   try {
-    const res = await fetch(`${conn.url.replace(/\/$/, '')}/_tasks/${encodeURIComponent(taskId)}`, {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/_tasks/${encodeURIComponent(taskId)}`, {
       method: 'GET',
       headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
     });
@@ -370,7 +395,7 @@ export async function deleteByQueryAsync(
   body: unknown,
   options?: { onProgress?: (s: DeleteTaskStatus) => void; signal?: AbortSignal; initialDelayMs?: number; maxRetries?: number }
 ): Promise<{ ok: boolean; status: number; taskId?: string; json?: unknown; error?: string }>{
-  const base = conn.url.replace(/\/$/, '');
+  const base = getProxiedUrl(conn.url).replace(/\/$/, '');
   const onProgress = options?.onProgress;
   const signal = options?.signal;
   const maxRetries = options?.maxRetries ?? 5;
@@ -413,6 +438,106 @@ export async function deleteByQueryAsync(
       const completed = Boolean(j.completed);
       const status = (j.task && typeof (j.task as Record<string, unknown>).status === 'object') ? ((j.task as Record<string, unknown>).status as DeleteTaskStatus['status']) : undefined;
       const progress: DeleteTaskStatus = { completed, status };
+      if (onProgress) onProgress(progress);
+      if (completed) {
+        const response = j.response ?? j;
+        return { ok: true, status: 200, taskId, json: response };
+      }
+      await sleep(delay);
+      delay = Math.min(delay * 2, 8000);
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Network error';
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
+export async function updateById(
+  conn: Connection,
+  index: string,
+  id: string,
+  body: unknown
+): Promise<{ ok: boolean; status: number; json?: unknown; error?: string }>{
+  try {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_update/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (!res.ok) return { ok: false, status: res.status, error: await res.text() };
+    const json = await res.json();
+    return { ok: true, status: res.status, json };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Network error';
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
+export async function updateByQuery(
+  conn: Connection,
+  index: string,
+  body: unknown
+): Promise<{ ok: boolean; status: number; json?: unknown; error?: string }>{
+  try {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_update_by_query`, {
+      method: 'POST',
+      headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (!res.ok) return { ok: false, status: res.status, error: await res.text() };
+    const json = await res.json();
+    return { ok: true, status: res.status, json };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Network error';
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
+export async function updateByQueryAsync(
+  conn: Connection,
+  index: string,
+  body: unknown,
+  options?: { onProgress?: (s: DeleteTaskStatus) => void; signal?: AbortSignal; initialDelayMs?: number; maxRetries?: number }
+): Promise<{ ok: boolean; status: number; taskId?: string; json?: unknown; error?: string }>{
+  const base = getProxiedUrl(conn.url).replace(/\/$/, '');
+  const onProgress = options?.onProgress;
+  const signal = options?.signal;
+  const maxRetries = options?.maxRetries ?? 5;
+  const initialDelayMs = options?.initialDelayMs ?? 500;
+  let delay = initialDelayMs;
+  try {
+    const startRes = await fetch(`${base}/${encodeURIComponent(index)}/_update_by_query`, {
+      method: 'POST',
+      headers: { ...buildHeaders(conn), 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ wait_for_completion: false, ...(body as Record<string, unknown> ?? {}) }),
+      signal,
+    });
+    if (!startRes.ok) return { ok: false, status: startRes.status, error: await startRes.text() };
+    const startJson: Record<string, unknown> = await startRes.json();
+    const taskId = String(startJson.task || '');
+    if (!taskId) {
+      const resp = startJson.response ?? startJson;
+      return { ok: true, status: startRes.status, json: resp };
+    }
+    let retries = 0;
+    while (true) {
+      if (signal?.aborted) return { ok: false, status: 0, taskId, error: 'Cancelled' };
+      const poll = await fetch(`${base}/_tasks/${encodeURIComponent(taskId)}`, {
+        method: 'GET',
+        headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
+        signal,
+      });
+      if (!poll.ok) {
+        if (++retries > maxRetries) return { ok: false, status: poll.status, taskId, error: `Task polling failed after ${maxRetries} retries` };
+        await sleep(delay);
+        delay = Math.min(delay * 2, 8000);
+        continue;
+      }
+      const j: DeleteTaskStatus = await poll.json();
+      const completed = j.completed ?? false;
+      const progress: DeleteTaskStatus = { ...j };
       if (onProgress) onProgress(progress);
       if (completed) {
         const response = j.response ?? j;

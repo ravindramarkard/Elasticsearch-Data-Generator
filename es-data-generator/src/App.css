@@ -1,7 +1,28 @@
 #root {
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 2rem;
+  max-width: 100%;
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+@media (min-width: 768px) {
+  #root {
+    padding: 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  #root {
+    padding: 2rem;
+  }
+}
+
+@media (min-width: 1920px) {
+  #root {
+    padding: 2rem 4rem;
+  }
 }
 
 .container h1 {
@@ -37,6 +58,12 @@ section {
 }
 .col {
   flex: 1;
+  min-width: 0; /* Allow flex items to shrink below content size */
+}
+
+.col.full-width {
+  flex: 1 0 100%;
+  width: 100%;
 }
 label {
   display: block;
@@ -64,6 +91,16 @@ button {
   border: 1px solid #334155;
   min-height: 3rem;
   white-space: pre-wrap;
+  overflow-x: auto;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+@media (max-width: 640px) {
+  .result {
+    padding: 0.5rem;
+    font-size: 0.85rem;
+  }
 }
 .result-pre {
   white-space: pre;
@@ -78,6 +115,16 @@ button {
   border: 1px solid #334155;
   background: #1a1f29;
   color: #e7e9ee;
+  box-sizing: border-box;
+  font-family: 'Courier New', monospace;
+  resize: vertical;
+}
+
+@media (max-width: 640px) {
+  .container textarea {
+    font-size: 0.85rem;
+    padding: 0.4rem;
+  }
 }
 .table-wrap button {
   margin-left: 0.5rem;
@@ -95,6 +142,19 @@ button {
   width: 100%;
   -webkit-overflow-scrolling: touch;
   background: #0f141d;
+  box-sizing: border-box;
+}
+
+@media (max-width: 640px) {
+  .table-wrap {
+    max-height: 280px;
+  }
+}
+
+@media (min-width: 1920px) {
+  .table-wrap {
+    max-height: 500px;
+  }
 }
 table {
   width: max-content;
@@ -152,21 +212,86 @@ input:focus, select:focus, button:focus, textarea:focus {
   color: #d1d5db;
 }
 
+/* Mobile styles */
 @media (max-width: 640px) {
+  #root {
+    padding: 0.75rem;
+  }
+  
   .row {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.75rem;
   }
-  table {
-    min-width: 480px;
+  
+  .tabs {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  
+  .tab {
+    font-size: 0.85rem;
+    padding: 0.4rem 0.6rem;
+  }
+  
+  .tab-icon {
     font-size: 0.9rem;
   }
+  
+  table {
+    min-width: 480px;
+    font-size: 0.85rem;
+  }
+  
+  th, td {
+    padding: 4px 6px;
+  }
+  
+  section {
+    padding: 0.75rem;
+  }
+  
+  .container h1 {
+    font-size: 1.5rem;
+  }
+  
+  button, input, select, textarea {
+    font-size: 0.9rem;
+  }
+}
+
+/* Tablet styles */
+@media (min-width: 641px) and (max-width: 1023px) {
+  .tabs {
+    flex-wrap: wrap;
+  }
+  
+  .tab {
+    font-size: 0.9rem;
+  }
+}
+
+/* Ensure full width for container */
+.container {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 /* removed duplicate #root block */
 
 html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-height: 100vh;
   background: #0f1115;
   color: #e7e9ee;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 /* Tabs */
 .tabs {
