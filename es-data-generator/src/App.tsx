@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect } from 'react';
 import './App.css';
+import * as XLSX from 'xlsx';
 import type { Connection, AuthType } from './esClient';
-import { pingHealth, fetchMapping, bulkInsert, translateSql, executeSql, nextSqlPage, closeSqlCursor, listIndices, listDataStreams, searchPreview, deleteByQueryAsync, updateByQueryAsync, updateById, cancelTask } from './esClient';
+import { pingHealth, fetchMapping, bulkInsert, translateSql, executeSql, nextSqlPage, closeSqlCursor, listIndices, listDataStreams, searchPreview, deleteByQueryAsync, updateByQueryAsync, updateById, cancelTask, getIndexCount } from './esClient';
 import { loadConnections, saveConnections, loadGeneratorConfigs, saveGeneratorConfig, deleteGeneratorConfig, loadLastGenerator, saveLastGenerator, loadAuditLogs, saveAuditLogs, clearAuditLogs, deleteOldAuditLogs } from './storage';
 import type { GeneratorConfig, AuditEntry } from './storage';
 import { extractMappingFromResponse, extractAnyMapping, generateDocs, diffMappings, listFieldsByType, flattenMappingFields, getDateFormatForField, formatDate, calculateNextPosition, CITIES, SEAPORTS, VEHICLE_LOCATIONS } from './generator';
@@ -20,6 +21,8 @@ const SQL_EXAMPLES: { id: string; label: string; query: string }[] = [
   { id: 'group-with-where', label: 'Grouping with WHERE', query: 'SELECT dest_iata, COUNT(*) FROM flights WHERE alt >= 30000 GROUP BY dest_iata ORDER BY COUNT(*) DESC LIMIT 20' },
   { id: 'agg-avg', label: 'AVG and ORDER BY', query: 'SELECT type, AVG(gspeed) avg_speed FROM flights GROUP BY type ORDER BY avg_speed DESC LIMIT 10' },
   { id: 'filter-source', label: 'Filter by source/type', query: "SELECT flight, alt, gspeed FROM flights WHERE source = 'ADSB' AND type = 'A321' ORDER BY alt DESC LIMIT 20" },
+  { id: 'select-specific', label: 'Select specific fields (avoid arrays)', query: 'SELECT id, name, status, timestamp FROM myindex LIMIT 20' },
+  { id: 'exclude-field', label: 'Exclude problematic field', query: 'SELECT id, name, status FROM myindex WHERE status IS NOT NULL LIMIT 20' },
 ];
 
 const UPDATE_QUERY_EXAMPLES: { id: string; label: string; body: string }[] = [
@@ -339,9 +342,15 @@ function App() {
   const [importStatus, setImportStatus] = useState<string>('');
   const [importProgress, setImportProgress] = useState<number>(0);
   const [importInProgress, setImportInProgress] = useState<boolean>(false);
-  const [importErrors, setImportErrors] = useState<Array<{ row: number; error: string; data: Record<string, unknown> }>>([]);
+  const [importAbortController, setImportAbortController] = useState<AbortController | null>(null);
+  const [importErrors, setImportErrors] = useState<Array<{ row: number; field?: string; error: string; data: Record<string, unknown> }>>([]);
   const [importSuccessCount, setImportSuccessCount] = useState<number>(0);
   const [importFailCount, setImportFailCount] = useState<number>(0);
+  const [importIndexCount, setImportIndexCount] = useState<number | null>(null);
+  const [importStartCount, setImportStartCount] = useState<number | null>(null);
+  const [importMultipleFiles, setImportMultipleFiles] = useState<File[]>([]);
+  const [importCurrentFileIndex, setImportCurrentFileIndex] = useState<number>(0);
+  const [importFileResults, setImportFileResults] = useState<Array<{ fileName: string; status: 'pending' | 'processing' | 'success' | 'error'; rows: number; succeeded?: number; failed?: number; error?: string }>>([]);
 
   function logAudit(action: string, category: AuditEntry['category'], details: string, status: AuditEntry['status'] = 'success', metadata?: Record<string, unknown>) {
     const entry: AuditEntry = {
@@ -421,13 +430,69 @@ function App() {
   }
 
   // Excel Parser (basic XLSX support using browser APIs)
-  async function parseExcel(_file: File): Promise<{ headers: string[]; rows: Record<string, unknown>[] }> {
+  async function parseExcel(file: File): Promise<{ headers: string[]; rows: Record<string, unknown>[] }> {
     try {
-      // For now, we'll inform users to convert to CSV
-      // Full Excel parsing would require adding the 'xlsx' library
-      throw new Error('Excel files not yet supported. Please convert to CSV format.');
+      // Read file as array buffer
+      const arrayBuffer = await file.arrayBuffer();
+      
+      // Parse the workbook
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      
+      // Get the first worksheet
+      const firstSheetName = workbook.SheetNames[0];
+      if (!firstSheetName) {
+        throw new Error('No worksheets found in the Excel file');
+      }
+      
+      const worksheet = workbook.Sheets[firstSheetName];
+      
+      // Convert to JSON (array of objects)
+      const jsonData: unknown[] = XLSX.utils.sheet_to_json(worksheet, { 
+        header: 1, // Get raw array of arrays first
+        raw: false, // Convert numbers to strings to preserve precision
+        defval: '' // Default value for empty cells
+      });
+      
+      if (!Array.isArray(jsonData) || jsonData.length === 0) {
+        throw new Error('No data found in the Excel file');
+      }
+      
+      // First row is headers
+      const headersRow = jsonData[0];
+      if (!Array.isArray(headersRow)) {
+        throw new Error('Invalid headers row in Excel file');
+      }
+      
+      const headers = headersRow.map((h, i) => {
+        const str = String(h || '').trim();
+        return str || `Column${i + 1}`;
+      });
+      
+      // Remaining rows are data
+      const dataRows = jsonData.slice(1);
+      const rows: Record<string, unknown>[] = [];
+      
+      for (const row of dataRows) {
+        if (!Array.isArray(row)) continue;
+        
+        // Skip completely empty rows
+        const hasData = row.some(cell => cell !== null && cell !== undefined && String(cell).trim() !== '');
+        if (!hasData) continue;
+        
+        const rowObj: Record<string, unknown> = {};
+        headers.forEach((header, index) => {
+          const value = row[index];
+          // Store the value, even if empty (will be cleaned later)
+          rowObj[header] = value !== null && value !== undefined ? value : '';
+        });
+        
+        rows.push(rowObj);
+      }
+      
+      return { headers, rows };
     } catch (e) {
-      throw e;
+      const msg = e instanceof Error ? e.message : 'Failed to parse Excel file';
+      throw new Error(msg);
     }
   }
 
@@ -460,6 +525,126 @@ function App() {
       setImportStatus(`Error: ${msg}`);
       logAudit('Parse Import File', 'system', `Failed to parse ${file.name}: ${msg}`, 'error', { fileName: file.name });
     }
+  }
+
+  async function handleMultipleFilesUpload(files: FileList) {
+    const fileArray = Array.from(files);
+    setImportMultipleFiles(fileArray);
+    setImportCurrentFileIndex(0);
+    
+    // Initialize results for each file
+    const results = fileArray.map(f => ({
+      fileName: f.name,
+      status: 'pending' as const,
+      rows: 0
+    }));
+    setImportFileResults(results);
+    
+    setImportStatus(`${fileArray.length} file(s) selected. Ready to import.`);
+    logAudit('Select Multiple Files', 'import', `Selected ${fileArray.length} files for import`, 'success', { fileCount: fileArray.length, fileNames: fileArray.map(f => f.name) });
+  }
+
+  async function processMultipleFiles() {
+    if (!selected) {
+      setImportStatus('Error: Please select a connection');
+      return;
+    }
+    
+    if (!importIndex) {
+      setImportStatus('Error: Please select a target index');
+      return;
+    }
+    
+    if (importMultipleFiles.length === 0) {
+      setImportStatus('Error: No files selected');
+      return;
+    }
+    
+    setImportInProgress(true);
+    let totalSucceeded = 0;
+    let totalFailed = 0;
+    let totalRows = 0;
+    
+    for (let i = 0; i < importMultipleFiles.length; i++) {
+      const file = importMultipleFiles[i];
+      setImportCurrentFileIndex(i);
+      
+      // Update status to processing
+      setImportFileResults(prev => prev.map((r, idx) => 
+        idx === i ? { ...r, status: 'processing' as const } : r
+      ));
+      
+      setImportStatus(`[${i + 1}/${importMultipleFiles.length}] Processing ${file.name}...`);
+      
+      try {
+        // Parse file
+        let result: { headers: string[]; rows: Record<string, unknown>[] };
+        
+        if (file.name.endsWith('.csv')) {
+          const text = await file.text();
+          result = parseCSV(text);
+        } else if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+          result = await parseExcel(file);
+        } else {
+          throw new Error('Unsupported file format');
+        }
+        
+        totalRows += result.rows.length;
+        
+        // Clean data
+        const transformedData = result.rows.map((doc) => {
+          const cleaned: Record<string, any> = {};
+          
+          for (const [key, value] of Object.entries(doc)) {
+            if (value === '' || value === null || value === undefined) {
+              continue;
+            }
+            if (typeof value === 'string' && value.trim() === '') {
+              continue;
+            }
+            cleaned[key] = value;
+          }
+          
+          return cleaned;
+        });
+        
+        // Insert data
+        const abortController = new AbortController();
+        const chunkSize = result.rows.length < 10000 ? 1000 : result.rows.length < 50000 ? 3000 : 5000;
+        
+        const res = await bulkInsert(selected, importIndex, transformedData, chunkSize, {
+          signal: abortController.signal,
+          onProgress: () => {
+            // Silent progress for multi-file
+          }
+        });
+        
+        if (res.ok) {
+          const succeeded = res.succeeded || 0;
+          const failed = res.failed || 0;
+          totalSucceeded += succeeded;
+          totalFailed += failed;
+          
+          setImportFileResults(prev => prev.map((r, idx) => 
+            idx === i ? { ...r, status: 'success' as const, rows: result.rows.length, succeeded, failed } : r
+          ));
+          
+          logAudit('Import File', 'import', `Imported ${file.name}: ${succeeded} succeeded, ${failed} failed`, 'success', { fileName: file.name, succeeded, failed });
+        } else {
+          throw new Error(res.error || 'Bulk insert failed');
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Unknown error';
+        setImportFileResults(prev => prev.map((r, idx) => 
+          idx === i ? { ...r, status: 'error' as const, error: msg } : r
+        ));
+        logAudit('Import File', 'import', `Failed to import ${file.name}: ${msg}`, 'error', { fileName: file.name });
+      }
+    }
+    
+    setImportInProgress(false);
+    setImportStatus(`✅ Completed: ${importMultipleFiles.length} files, ${totalRows} rows total. Succeeded: ${totalSucceeded}, Failed: ${totalFailed}`);
+    logAudit('Complete Multiple Files Import', 'import', `Imported ${importMultipleFiles.length} files: ${totalSucceeded} succeeded, ${totalFailed} failed`, 'success', { fileCount: importMultipleFiles.length, totalRows, totalSucceeded, totalFailed });
   }
   function applyDefaultSqlFrom(value: string) {
     if (!value) return;
@@ -1971,6 +2156,17 @@ function App() {
           )}
         </div>
         <pre className="result">{dataStreamsStatus}</pre>
+        
+        <div style={{ padding: '0.75em', background: '#fff9e6', borderRadius: '4px', marginBottom: '1em', fontSize: '0.9em', color: '#856404', border: '1px solid #ffeaa7' }}>
+          <strong>⚠️ Elasticsearch SQL Limitations:</strong>
+          <ul style={{ margin: '0.5em 0 0 1.5em', paddingLeft: 0 }}>
+            <li><strong>Array fields are not supported</strong> - Click "📋 View as List" button to see data with arrays in JSON format</li>
+            <li>Nested objects may have limited support - use dot notation carefully</li>
+            <li>Some aggregations may not work as expected with complex field types</li>
+            <li><strong>TIP:</strong> Use "View as List" button to bypass SQL limitations and view all data including arrays!</li>
+          </ul>
+        </div>
+
         <div className="row">
           <div className="col">
             <label>SQL</label>
@@ -2021,7 +2217,73 @@ function App() {
                 }
                 const res = await executeSql(selected, sqlText, sqlFetchSize);
                 if (!res.ok || !res.json) {
-                  setSqlStatus(res.error || `HTTP ${res.status}`);
+                  let errorMsg = res.error || `HTTP ${res.status}`;
+                  
+                  // Check for common array field error and offer fallback
+                  if (errorMsg.includes('Arrays') && errorMsg.includes('are not supported')) {
+                    const arrayFieldMatch = errorMsg.match(/returned by \[([^\]]+)\]/);
+                    const fieldName = arrayFieldMatch ? arrayFieldMatch[1] : 'unknown field';
+                    
+                    // Try fallback to Search API for viewing data
+                    setSqlStatus(`❌ SQL doesn't support array field "${fieldName}". Attempting fallback to Search API...`);
+                    
+                    try {
+                      // Extract index name from SQL query
+                      const fromMatch = sqlText.match(/FROM\s+([^\s]+)/i);
+                      const indexForSearch = fromMatch ? fromMatch[1].replace(/"/g, '') : sqlSourceValue;
+                      
+                      if (indexForSearch) {
+                        // Use Search API as fallback
+                        const searchBody = {
+                          size: sqlFetchSize,
+                          query: { match_all: {} }
+                        };
+                        
+                        const searchRes = await searchPreview(selected, indexForSearch, searchBody);
+                        
+                        if (searchRes.ok && searchRes.json) {
+                          const searchJson = searchRes.json as Record<string, unknown>;
+                          const hits = ((searchJson.hits as Record<string, unknown>)?.hits as Array<any>) || [];
+                          const docs = hits.map((h: any) => h._source || {});
+                          
+                          // Convert to SQL-like format for display
+                          if (docs.length > 0) {
+                            const allKeys = new Set<string>();
+                            docs.forEach((doc: any) => {
+                              Object.keys(doc).forEach(k => allKeys.add(k));
+                            });
+                            
+                            const columns = Array.from(allKeys).map(k => ({ name: k, type: 'keyword' }));
+                            const rows = docs.map((doc: any) => 
+                              columns.map(col => doc[col.name])
+                            );
+                            
+                            setSqlColumns(columns);
+                            setSqlRows(rows);
+                            setSqlCursor('');
+                            setSqlView('json'); // Force JSON view for array data
+                            setSqlStatus(`⚠️ SQL failed due to array field "${fieldName}"\n✅ Fallback: Loaded ${docs.length} documents using Search API\n💡 Switch to JSON view to see all fields including arrays`);
+                            setSqlPage(1);
+                            setSqlPageSize(sqlFetchSize);
+                            logAudit('Execute SQL (Fallback)', 'query', `SQL failed, used Search API fallback for ${indexForSearch}: ${docs.length} docs`, 'warning', { rowCount: docs.length, arrayField: fieldName });
+                            return;
+                          }
+                        }
+                      }
+                    } catch (fallbackError) {
+                      // Fallback also failed, show original error
+                      errorMsg = `❌ SQL Error: Elasticsearch SQL does not support array fields.\n\n` +
+                                 `Field "${fieldName}" contains array values.\n\n` +
+                                 `Solutions:\n` +
+                                 `1. Exclude this field from your SELECT statement\n` +
+                                 `2. Use wildcard to select all other fields: SELECT * EXCEPT ${fieldName}\n` +
+                                 `3. Use the Search API instead of SQL for querying array fields\n` +
+                                 `4. Flatten the array field in your index mapping\n\n` +
+                                 `Original error:\n${res.error || `HTTP ${res.status}`}`;
+                    }
+                  }
+                  
+                  setSqlStatus(errorMsg);
                   logAudit('Execute SQL', 'query', `Failed to execute SQL query: ${sqlText.substring(0, 100)}...`, 'error');
                   return;
                 }
@@ -2035,6 +2297,71 @@ function App() {
                 setSqlPageSize(sqlFetchSize);
                 logAudit('Execute SQL', 'query', `Executed SQL query, fetched ${res.json.rows.length} rows`, 'success', { rowCount: res.json.rows.length });
               }}>Execute</button>
+          
+          <button disabled={!selected} onClick={async () => {
+            if (!selected) return;
+            setSqlStatus('Loading as List View (Search API)...');
+            
+            try {
+              // Extract index name from SQL query or use default
+              const fromMatch = sqlText.match(/FROM\s+([^\s]+)/i);
+              const indexForSearch = fromMatch ? fromMatch[1].replace(/"/g, '') : sqlSourceValue;
+              
+              if (!indexForSearch) {
+                setSqlStatus('❌ Please select an index or specify FROM clause in SQL');
+                return;
+              }
+              
+              // Use Search API to fetch data
+              const searchBody = {
+                size: sqlFetchSize,
+                query: { match_all: {} }
+              };
+              
+              const searchRes = await searchPreview(selected, indexForSearch, searchBody);
+              
+              if (!searchRes.ok || !searchRes.json) {
+                setSqlStatus(searchRes.error || `HTTP ${searchRes.status}`);
+                return;
+              }
+              
+              const searchJson = searchRes.json as Record<string, unknown>;
+              const hits = ((searchJson.hits as Record<string, unknown>)?.hits as Array<any>) || [];
+              const docs = hits.map((h: any) => ({ _id: h._id, ...h._source }));
+              
+              if (docs.length === 0) {
+                setSqlStatus('✅ Index is empty or no documents found');
+                setSqlColumns([]);
+                setSqlRows([]);
+                return;
+              }
+              
+              // Convert to SQL-like format
+              const allKeys = new Set<string>();
+              docs.forEach((doc: any) => {
+                Object.keys(doc).forEach(k => allKeys.add(k));
+              });
+              
+              const columns = Array.from(allKeys).map(k => ({ name: k, type: 'keyword' }));
+              const rows = docs.map((doc: any) => 
+                columns.map(col => doc[col.name])
+              );
+              
+              setSqlColumns(columns);
+              setSqlRows(rows);
+              setSqlCursor('');
+              setSqlView('json'); // Force JSON view for complete data
+              setSqlStatus(`✅ List View: Loaded ${docs.length} documents from ${indexForSearch}\n💡 Using Search API - supports all field types including arrays`);
+              setSqlPage(1);
+              setSqlPageSize(sqlFetchSize);
+              logAudit('View as List', 'query', `Loaded ${docs.length} documents from ${indexForSearch} using Search API`, 'success', { rowCount: docs.length, index: indexForSearch });
+            } catch (error) {
+              const msg = error instanceof Error ? error.message : 'Failed to load list view';
+              setSqlStatus(`❌ ${msg}`);
+              logAudit('View as List', 'query', `Failed to load list view: ${msg}`, 'error');
+            }
+          }}>📋 View as List</button>
+          
           <button disabled={!selected || !sqlCursor} onClick={async () => {
             if (!selected || !sqlCursor) return;
             setSqlStatus('Next page…');
@@ -2730,7 +3057,7 @@ function App() {
             >
               🗑️ Clear All
             </button>
-          </div>
+    </div>
         </div>
 
         <div className="row">
@@ -2752,6 +3079,7 @@ function App() {
               <option value="query">🧾 Query</option>
               <option value="update">✏️ Update</option>
               <option value="delete">🗑️ Delete</option>
+              <option value="import">📤 Import</option>
               <option value="system">⚙️ System</option>
             </select>
           </div>
@@ -2811,6 +3139,7 @@ function App() {
                               {entry.category === 'update' && '✏️'}
                               {entry.category === 'delete' && '🗑️'}
                               {entry.category === 'system' && '⚙️'}
+                              {entry.category === 'import' && '📤'}
                               {' '}{entry.category}
                             </td>
                             <td style={{ fontWeight: 600 }}>{entry.action}</td>
@@ -2853,14 +3182,21 @@ function App() {
 
         <div className="row">
           <div className="col">
-            <label>Upload File (CSV or Excel)</label>
+            <label>Upload File(s) (CSV or Excel) - Select multiple files to batch import</label>
             <input 
               type="file" 
               accept=".csv,.xlsx,.xls"
+              multiple
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) {
-                  handleFileUpload(file);
+                const files = e.target.files;
+                if (files) {
+                  if (files.length === 1) {
+                    // Single file - show preview
+                    handleFileUpload(files[0]);
+                  } else if (files.length > 1) {
+                    // Multiple files - batch mode
+                    handleMultipleFilesUpload(files);
+                  }
                 }
               }}
               style={{ padding: '0.5rem', cursor: 'pointer' }}
@@ -2880,7 +3216,78 @@ function App() {
 
         <pre className="result">{importStatus}</pre>
 
-        {importData.length > 0 && (
+        {importMultipleFiles.length > 1 && (
+          <>
+            <h3>📁 Batch Import: {importMultipleFiles.length} Files</h3>
+            <div className="row" style={{ marginBottom: '1em' }}>
+              <div className="col">
+                <div style={{ background: '#f8f9fa', padding: '1em', borderRadius: '4px', border: '1px solid #dee2e6' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                    <thead>
+                      <tr style={{ borderBottom: '2px solid #dee2e6' }}>
+                        <th style={{ padding: '0.5em', textAlign: 'left', width: '5%' }}>#</th>
+                        <th style={{ padding: '0.5em', textAlign: 'left', width: '40%' }}>File Name</th>
+                        <th style={{ padding: '0.5em', textAlign: 'left', width: '15%' }}>Status</th>
+                        <th style={{ padding: '0.5em', textAlign: 'left', width: '10%' }}>Rows</th>
+                        <th style={{ padding: '0.5em', textAlign: 'left', width: '15%' }}>Succeeded</th>
+                        <th style={{ padding: '0.5em', textAlign: 'left', width: '15%' }}>Failed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {importFileResults.map((result, idx) => (
+                        <tr key={idx} style={{ borderBottom: '1px solid #e9ecef' }}>
+                          <td style={{ padding: '0.5em' }}>{idx + 1}</td>
+                          <td style={{ padding: '0.5em', wordBreak: 'break-all' }}>{result.fileName}</td>
+                          <td style={{ padding: '0.5em' }}>
+                            {result.status === 'pending' && '⏳ Pending'}
+                            {result.status === 'processing' && '🔄 Processing...'}
+                            {result.status === 'success' && '✅ Success'}
+                            {result.status === 'error' && '❌ Error'}
+                          </td>
+                          <td style={{ padding: '0.5em' }}>{result.rows > 0 ? result.rows : '-'}</td>
+                          <td style={{ padding: '0.5em', color: '#28a745' }}>{result.succeeded !== undefined ? result.succeeded : '-'}</td>
+                          <td style={{ padding: '0.5em', color: '#dc3545' }}>{result.failed !== undefined ? result.failed : '-'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importFileResults.some(r => r.status === 'error' && r.error) && (
+                    <div style={{ marginTop: '1em', padding: '0.75em', background: '#fff3cd', borderRadius: '4px', border: '1px solid #ffc107' }}>
+                      <strong>⚠️ Errors:</strong>
+                      <ul style={{ margin: '0.5em 0 0 0', paddingLeft: '1.5em', fontSize: '0.9em' }}>
+                        {importFileResults.filter(r => r.error).map((r, idx) => (
+                          <li key={idx}><strong>{r.fileName}:</strong> {r.error}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="row" style={{ marginBottom: '2em' }}>
+              <button
+                disabled={!importIndex || importInProgress}
+                onClick={processMultipleFiles}
+                style={{ background: '#28a745' }}
+              >
+                🚀 Import All {importMultipleFiles.length} Files
+              </button>
+              <button
+                onClick={() => {
+                  setImportMultipleFiles([]);
+                  setImportFileResults([]);
+                  setImportStatus('Cleared batch import.');
+                }}
+                style={{ background: '#6c757d' }}
+              >
+                🗑️ Clear Batch
+              </button>
+            </div>
+          </>
+        )}
+
+        {importData.length > 0 && importMultipleFiles.length <= 1 && (
           <>
             <h3>Data Preview ({importData.length} rows)</h3>
             <div className="row">
@@ -2919,57 +3326,260 @@ function App() {
                 onClick={async () => {
                   if (!selected || !importIndex || importData.length === 0) return;
                   
+                  // Create AbortController for cancellation
+                  const abortController = new AbortController();
+                  setImportAbortController(abortController);
+                  
                   setImportInProgress(true);
                   setImportProgress(0);
                   setImportErrors([]);
                   setImportSuccessCount(0);
                   setImportFailCount(0);
-                  setImportStatus('Inserting data...');
+                  setImportStatus('Preparing data for import...');
 
                   try {
-                    const res = await bulkInsert(selected, importIndex, importData, 1000, {
-                      onProgress: (info) => {
-                        const pct = info.total > 0 ? Math.floor((info.processed / info.total) * 100) : 0;
-                        setImportProgress(pct);
+                    // Check if we have separate LAT/LON columns that need to be combined
+                    const hasLatColumn = importHeaders.some(h => h.toLowerCase() === 'lat' || h.toLowerCase() === 'latitude');
+                    const hasLonColumn = importHeaders.some(h => h.toLowerCase() === 'lon' || h.toLowerCase() === 'longitude' || h.toLowerCase() === 'long');
+                    
+                    if (hasLatColumn && hasLonColumn) {
+                      const latField = importHeaders.find(h => h.toLowerCase() === 'lat' || h.toLowerCase() === 'latitude') || 'LAT';
+                      const lonField = importHeaders.find(h => h.toLowerCase() === 'lon' || h.toLowerCase() === 'longitude' || h.toLowerCase() === 'long') || 'LON';
+                      
+                      // Try to detect geo field name from mapping
+                      let geoField = 'location'; // Default
+                      try {
+                        const mappingRes = await fetchMapping(selected, importIndex);
+                        if (mappingRes.ok && mappingRes.json) {
+                          const json = mappingRes.json as Record<string, any>;
+                          const indexMappings = json[importIndex]?.mappings || json.mappings || {};
+                          if (indexMappings.properties) {
+                            const geoFields = Object.entries(indexMappings.properties).filter(([_, spec]: any) => spec.type === 'geo_point');
+                            if (geoFields.length > 0) {
+                              geoField = geoFields[0][0];
+                            }
+                          }
+                        }
+                      } catch (e) {
+                        console.log('Could not detect geo field, using default "location"');
+                      }
+                      
+                      setImportStatus(`🗺️ Auto-combining ${latField} and ${lonField} into "${geoField}"...`);
+                      
+                      let combinedCount = 0;
+                      let skippedCount = 0;
+                      
+                      // Combine LAT/LON into geo_point field
+                      importData.forEach((doc, idx) => {
+                        const lat = doc[latField];
+                        const lon = doc[lonField];
+                        
+                        // Check if both values exist and are valid numbers
+                        const latNum = typeof lat === 'string' ? parseFloat(lat) : (typeof lat === 'number' ? lat : NaN);
+                        const lonNum = typeof lon === 'string' ? parseFloat(lon) : (typeof lon === 'number' ? lon : NaN);
+                        
+                        if (!isNaN(latNum) && !isNaN(lonNum) && latNum !== 0 && lonNum !== 0) {
+                          // Use object format for better ES compatibility
+                          doc[geoField] = { lat: latNum, lon: lonNum };
+                          combinedCount++;
+                          
+                          // Remove individual LAT/LON fields
+                          delete doc[latField];
+                          delete doc[lonField];
+                        } else {
+                          skippedCount++;
+                          console.warn(`Row ${idx + 1}: Invalid LAT/LON - LAT: ${lat}, LON: ${lon}`);
+                          // Remove invalid LAT/LON fields to avoid ES errors
+                          delete doc[latField];
+                          delete doc[lonField];
+                        }
+                      });
+                      
+                      // Update headers
+                      setImportHeaders(prev => prev.filter(h => h !== latField && h !== lonField).concat(geoField));
+                      
+                      console.log('Geo-point combination summary:', {
+                        total: importData.length,
+                        combined: combinedCount,
+                        skipped: skippedCount,
+                        geoField,
+                        sampleValid: importData.find(d => d[geoField]),
+                        sampleInvalid: importData.find(d => !d[geoField])
+                      });
+                      
+                      setImportStatus(`✅ Combined ${combinedCount} valid geo-points\n⚠️ Skipped ${skippedCount} rows with invalid LAT/LON values`);
+                    }
+                    
+                    // Get initial index count
+                    const initialCountRes = await getIndexCount(selected, importIndex);
+                    const initialCount = initialCountRes.ok ? (initialCountRes.count || 0) : 0;
+                    setImportStartCount(initialCount);
+                    setImportIndexCount(initialCount);
+                    
+                    // Use data as-is without validation
+                    // Clean data: remove empty strings and handle null values
+                    setImportStatus('Cleaning data (removing empty values)...');
+                    setImportProgress(5);
+                    
+                    const transformedData = importData.map((doc) => {
+                      const cleaned: Record<string, any> = {};
+                      
+                      for (const [key, value] of Object.entries(doc)) {
+                        // Skip empty strings, null, undefined - these cause ES parsing errors
+                        if (value === '' || value === null || value === undefined) {
+                          continue; // Don't include this field
+                        }
+                        
+                        // Skip values that are just whitespace
+                        if (typeof value === 'string' && value.trim() === '') {
+                          continue;
+                        }
+                        
+                        // Keep valid values
+                        cleaned[key] = value;
+                      }
+                      
+                      return cleaned;
+                    });
+                    
+                    console.log('Data cleaning summary:', {
+                      originalFields: Object.keys(importData[0] || {}).length,
+                      cleanedFields: Object.keys(transformedData[0] || {}).length,
+                      sampleOriginal: importData[0],
+                      sampleCleaned: transformedData[0]
+                    });
+                    
+                    setImportStatus('Data cleaned. Starting bulk insert...');
+                    setImportProgress(10);
+                    
+                    // Bulk insert with optimized chunks
+                    const CHUNK_SIZE = importData.length > 50000 ? 1000 : (importData.length > 10000 ? 2000 : 5000); // Larger chunks for faster insertion
+                    
+                    // Track index count updates
+                    let lastCountUpdate = Date.now();
+                    
+                    const res = await bulkInsert(selected, importIndex, transformedData, CHUNK_SIZE, {
+                      signal: abortController.signal,
+                      onProgress: async (info) => {
+                        // Progress: 10% prep, 90% for insertion
+                        const insertionProgress = info.total > 0 ? Math.floor((info.processed / info.total) * 90) : 0;
+                        const totalProgress = 10 + insertionProgress;
+                        setImportProgress(totalProgress);
                         setImportSuccessCount(info.succeeded);
                         setImportFailCount(info.failed);
-                        setImportStatus(`Uploading ${info.processed}/${info.total} (chunk ${info.chunkIndex + 1}/${info.chunkCount})…`);
+                        
+                        // Update index count every 3 seconds or on completion
+                        const now = Date.now();
+                        if (now - lastCountUpdate > 3000 || info.processed === info.total) {
+                          lastCountUpdate = now;
+                          const countRes = await getIndexCount(selected, importIndex);
+                          if (countRes.ok && countRes.count !== undefined) {
+                            setImportIndexCount(countRes.count);
+                          }
+                        }
+                        
+                        const currentIndexDocs = importIndexCount !== null ? ` | 📊 Index: ${importIndexCount.toLocaleString()} docs` : '';
+                        setImportStatus(`📤 Inserting data... ${info.processed}/${info.total} rows (chunk ${info.chunkIndex + 1}/${info.chunkCount})\n✅ Success: ${info.succeeded} | ❌ Failed: ${info.failed}${currentIndexDocs}`);
                       },
                     });
 
                     setImportInProgress(false);
+                    setImportAbortController(null);
                     
                     if (!res.ok) {
-                      setImportStatus(`Error: ${res.error || `HTTP ${res.status}`}`);
-                      logAudit('Import Data', 'generation', `Failed to import ${importData.length} rows to ${importIndex}: ${res.error}`, 'error', { rowCount: importData.length, index: importIndex, fileName: importFile?.name });
+                      const wasCancelled = res.error === 'Cancelled';
+                      setImportStatus(wasCancelled ? '⚠️ Import cancelled by user' : `❌ Error: ${res.error || `HTTP ${res.status}`}`);
+                      if (!wasCancelled) {
+                        logAudit('Import Data', 'import', `Failed to import ${importData.length} rows to ${importIndex}: ${res.error}`, 'error', { rowCount: importData.length, index: importIndex, fileName: importFile?.name });
+                      }
                       return;
                     }
 
                     const succeeded = res.succeeded ?? importSuccessCount;
                     const failed = res.failed ?? importFailCount;
                     
-                    // Collect errors from response
-                    if (res.errors && Array.isArray(res.errors)) {
-                      const errorList = res.errors.map((err: any, idx: number) => ({
-                        row: idx + 1,
-                        error: err.error?.reason || err.error || 'Unknown error',
-                        data: importData[idx] || {}
-                      }));
-                      setImportErrors(errorList);
+                    // Get final index count
+                    const finalCountRes = await getIndexCount(selected, importIndex);
+                    const finalCount = finalCountRes.ok ? (finalCountRes.count || 0) : 0;
+                    setImportIndexCount(finalCount);
+                    
+                    const countDelta = importStartCount !== null ? finalCount - importStartCount : succeeded;
+                    
+                    // Collect errors from bulk insert response
+                    const bulkErrors: Array<{ row: number; field?: string; error: string; data: Record<string, unknown> }> = [];
+                    
+                    if (res.errorDetails && Array.isArray(res.errorDetails)) {
+                      res.errorDetails.forEach((detail: any) => {
+                        bulkErrors.push({
+                          row: detail.index + 1,
+                          error: detail.error,
+                          data: detail.doc as Record<string, unknown>
+                        });
+                      });
+                    }
+                    
+                    // Show errors if any
+                    if (bulkErrors.length > 0) {
+                      setImportErrors(bulkErrors);
+                      console.log('Import errors (first 10):', bulkErrors.slice(0, 10));
+                      console.log('All error messages:', Array.from(new Set(bulkErrors.map(e => e.error))));
+                    }
+                    
+                    // Log summary
+                    console.log('Import summary:', {
+                      attempted: importData.length,
+                      succeeded,
+                      failed,
+                      bulkErrors: bulkErrors.length,
+                      successRate: `${((succeeded / importData.length) * 100).toFixed(1)}%`
+                    });
+                    
+                    // Log analysis for the consistent 19/80 split
+                    if (succeeded === 19 && failed === 80) {
+                      console.warn('⚠️ CONSISTENT PATTERN DETECTED: Always 19 succeed, 80 fail');
+                      console.warn('Likely causes:');
+                      console.warn('1. First 19 rows have valid data, remaining 80 have formatting issues');
+                      console.warn('2. Check if rows 20-99 have empty/invalid LAT/LON values');
+                      console.warn('3. Check if rows 20-99 are missing required fields');
+                      console.log('Sample successful doc (row ~1-19):', transformedData[0]);
+                      console.log('Sample failed doc (row ~20):', transformedData[19]);
+                      console.log('Sample failed doc (row ~50):', transformedData[49]);
                     }
 
                     setImportProgress(100);
-                    setImportStatus(`✅ Import complete: ${succeeded} succeeded, ${failed} failed`);
-                    logAudit('Import Data', 'generation', `Imported data from ${importFile?.name} to ${importIndex}: ${succeeded} succeeded, ${failed} failed`, failed > 0 ? 'warning' : 'success', { succeeded, failed, index: importIndex, fileName: importFile?.name });
+                    setImportStatus(
+                      `✅ Import complete!\n\n` +
+                      `📤 Attempted: ${importData.length.toLocaleString()} rows\n` +
+                      `✅ Succeeded: ${succeeded.toLocaleString()}\n` +
+                      `❌ Failed: ${failed.toLocaleString()}\n\n` +
+                      `📊 Index "${importIndex}":\n` +
+                      `   Before: ${importStartCount !== null ? importStartCount.toLocaleString() : 'N/A'} docs\n` +
+                      `   After: ${finalCount.toLocaleString()} docs\n` +
+                      `   Added: +${countDelta.toLocaleString()} docs`
+                    );
+                    logAudit('Import Data', 'import', `Imported ${succeeded} docs to ${importIndex}: ${succeeded} succeeded, ${failed} failed`, failed > 0 ? 'warning' : 'success', { succeeded, failed, index: importIndex, fileName: importFile?.name, beforeCount: importStartCount, afterCount: finalCount });
                   } catch (e) {
                     const msg = e instanceof Error ? e.message : 'Unknown error';
                     setImportInProgress(false);
-                    setImportStatus(`Error: ${msg}`);
-                    logAudit('Import Data', 'generation', `Import failed: ${msg}`, 'error', { fileName: importFile?.name });
+                    setImportAbortController(null);
+                    setImportStatus(`❌ Error: ${msg}`);
+                    logAudit('Import Data', 'import', `Import failed: ${msg}`, 'error', { fileName: importFile?.name });
                   }
                 }}
               >
                 📤 Insert Data to Index
+              </button>
+              <button 
+                disabled={!importInProgress}
+                onClick={() => {
+                  if (importAbortController) {
+                    importAbortController.abort();
+                    setImportStatus('⚠️ Cancelling import...');
+                  }
+                }}
+                style={{ background: '#e74c3c' }}
+              >
+                🛑 Cancel Import
               </button>
               <button 
                 onClick={() => {
@@ -2981,6 +3591,8 @@ function App() {
                   setImportProgress(0);
                   setImportSuccessCount(0);
                   setImportFailCount(0);
+                  setImportIndexCount(null);
+                  setImportStartCount(null);
                 }}
               >
                 🗑️ Clear
@@ -2994,7 +3606,12 @@ function App() {
                     <div style={{ width: `${importProgress}%`, height: '8px', background: '#3b82f6', borderRadius: '4px', transition: 'width 0.3s' }} />
                   </div>
                   <p style={{ fontSize: '0.9em', color: '#9aa4b2', marginTop: '0.5em' }}>
-                    Progress: {importProgress}% • Success: {importSuccessCount} • Failed: {importFailCount}
+                    Progress: {importProgress}% • Success: {importSuccessCount.toLocaleString()} • Failed: {importFailCount.toLocaleString()}
+                    {importIndexCount !== null && importStartCount !== null && (
+                      <span style={{ marginLeft: '1em', color: '#3b82f6', fontWeight: 600 }}>
+                        📊 Index: {importIndexCount.toLocaleString()} docs (+{(importIndexCount - importStartCount).toLocaleString()})
+                      </span>
+                    )}
                   </p>
                 </div>
               </div>
@@ -3002,7 +3619,78 @@ function App() {
 
             {importErrors.length > 0 && (
               <>
-                <h3 style={{ color: '#e74c3c' }}>Errors ({importErrors.length})</h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1em' }}>
+                  <h3 style={{ color: '#e74c3c', margin: 0 }}>Errors ({importErrors.length})</h3>
+                  <button 
+                    onClick={() => {
+                      // Export errors to CSV
+                      const csvContent = [
+                        ['Row #', 'Field', 'Error', 'Data'],
+                        ...importErrors.map(err => [
+                          err.row.toString(),
+                          err.field || '-',
+                          err.error,
+                          JSON.stringify(err.data)
+                        ])
+                      ].map(row => row.map(cell => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\n');
+                      
+                      const blob = new Blob([csvContent], { type: 'text/csv' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `import-errors-${importIndex}-${Date.now()}.csv`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    style={{ padding: '0.5em 1em', background: '#3b82f6', border: 'none', borderRadius: '4px', color: 'white', cursor: 'pointer', fontSize: '0.9em' }}
+                  >
+                    📥 Export Errors to CSV
+                  </button>
+                </div>
+                
+                {/* Error summary */}
+                <div style={{ padding: '1em', background: '#fff3f3', borderRadius: '4px', marginTop: '1em', marginBottom: '1em' }}>
+                  <strong style={{ color: '#e74c3c' }}>⚠️ Error Analysis:</strong>
+                  <div style={{ marginTop: '0.5em' }}>
+                    <strong>Common Error Types:</strong>
+                    <ul style={{ margin: '0.5em 0 0 0', paddingLeft: '1.5em', fontSize: '0.9em', color: '#666' }}>
+                      {Array.from(new Set(importErrors.map(e => {
+                        const match = e.error.match(/\[(\d+)\]\s*([^:]+)/);
+                        return match ? `[${match[1]}] ${match[2]}` : e.error.substring(0, 50);
+                      }))).slice(0, 5).map((errType, i) => {
+                        const count = importErrors.filter(e => e.error.includes(errType.split(']')[1] || errType)).length;
+                        return <li key={i}><strong>{errType}:</strong> {count} occurrence{count > 1 ? 's' : ''}</li>;
+                      })}
+                    </ul>
+                  </div>
+                  
+                  <div style={{ marginTop: '1em', padding: '0.75em', background: '#fff', borderRadius: '4px', border: '1px solid #ffcccc' }}>
+                    <strong>Sample Error Detail (Row {importErrors[0]?.row}):</strong>
+                    <pre style={{ margin: '0.5em 0 0 0', fontSize: '0.85em', whiteSpace: 'pre-wrap', color: '#666' }}>
+                      {importErrors[0]?.error}
+                    </pre>
+                    {importErrors[0]?.data && (
+                      <details style={{ marginTop: '0.5em' }}>
+                        <summary style={{ cursor: 'pointer', color: '#3b82f6', fontSize: '0.85em' }}>View failed document data</summary>
+                        <pre style={{ margin: '0.5em 0 0 0', fontSize: '0.8em', color: '#666', maxHeight: '150px', overflow: 'auto' }}>
+                          {JSON.stringify(importErrors[0].data, null, 2)}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                  
+                  <div style={{ marginTop: '1em', fontSize: '0.9em', color: '#856404', padding: '0.5em', background: '#fff9e6', borderRadius: '4px' }}>
+                    <strong>💡 Debugging Tips:</strong>
+                    <ul style={{ margin: '0.5em 0 0 0', paddingLeft: '1.5em', fontSize: '0.95em' }}>
+                      <li><strong>Check Console (F12):</strong> See detailed row-by-row analysis</li>
+                      <li><strong>Export Errors:</strong> Click "📥 Export Errors to CSV" to analyze in Excel</li>
+                      <li><strong>Check First Row:</strong> If row 1-19 succeed but 20+ fail, check for data differences</li>
+                      <li><strong>Mapper Parsing Exception:</strong> Usually means field type mismatch (wrong data format for the field type)</li>
+                      <li><strong>Empty Values:</strong> Missing required fields or empty geo-coordinates</li>
+                    </ul>
+                  </div>
+                </div>
+                
                 <div className="row">
                   <div className="col">
                     <div className="table-wrap" style={{ maxHeight: '300px' }}>
@@ -3010,6 +3698,7 @@ function App() {
                         <thead>
                           <tr>
                             <th>Row #</th>
+                            <th>Field</th>
                             <th>Error</th>
                             <th>Data</th>
                           </tr>
@@ -3018,6 +3707,7 @@ function App() {
                           {importErrors.map((err, i) => (
                             <tr key={i} style={{ background: '#fff3f3' }}>
                               <td>{err.row}</td>
+                              <td style={{ fontWeight: 600, color: '#3b82f6' }}>{err.field || '-'}</td>
                               <td style={{ color: '#e74c3c' }}>{err.error}</td>
                               <td style={{ maxWidth: '400px', overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: '0.85em' }}>
                                 {JSON.stringify(err.data, null, 2)}
@@ -3033,20 +3723,6 @@ function App() {
             )}
           </>
         )}
-
-        <div style={{ marginTop: '2em', padding: '1em', background: '#f8f9fa', borderRadius: '4px' }}>
-          <h3 style={{ marginTop: 0 }}>💡 Tips</h3>
-          <ul style={{ margin: 0, paddingLeft: '1.5em', fontSize: '0.9em', color: '#666' }}>
-            <li>CSV files should have headers in the first row</li>
-            <li>Column names will be used as field names in Elasticsearch</li>
-            <li>Numeric values will be automatically detected and converted</li>
-            <li>Boolean values (true/false) will be converted to boolean type</li>
-            <li>Empty cells will be stored as null</li>
-            <li>For Excel files, please convert to CSV format first</li>
-            <li>Large files will be uploaded in chunks for better performance</li>
-            <li>Check the error table below for any failed insertions</li>
-          </ul>
-        </div>
       </section>
       )}
 

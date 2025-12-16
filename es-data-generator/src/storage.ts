@@ -90,7 +90,7 @@ export type AuditEntry = {
   timestamp: string;
   user: string;
   action: string;
-  category: 'connection' | 'schema' | 'generation' | 'query' | 'update' | 'delete' | 'system';
+  category: 'connection' | 'schema' | 'generation' | 'query' | 'update' | 'delete' | 'system' | 'import';
   details: string;
   status: 'success' | 'error' | 'warning';
   metadata?: Record<string, unknown>;

@@ -53,14 +53,32 @@ export async function pingHealth(conn: Connection): Promise<{ ok: boolean; statu
 export async function fetchMapping(conn: Connection, index: string): Promise<{ ok: boolean; status: number; json?: unknown; error?: string }> {
   try {
     const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
-    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_mapping`, {
+    const url = `${baseUrl}/${encodeURIComponent(index)}/_mapping`;
+    console.log('📡 Fetching mapping:', url);
+    
+    const res = await fetch(url, {
       method: 'GET',
       headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
     });
+    
+    console.log('📥 Mapping response:', res.status, res.statusText);
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error('❌ Mapping error:', errorText);
+      return { 
+        ok: false, 
+        status: res.status, 
+        error: `HTTP ${res.status}: ${res.statusText}${errorText ? ' - ' + errorText : ''}` 
+      };
+    }
+    
     const json = await res.json();
+    console.log('✅ Mapping fetched successfully');
     return { ok: res.ok, status: res.status, json };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Network error';
+    console.error('❌ Mapping fetch failed:', msg);
     return { ok: false, status: 0, error: msg };
   }
 }
@@ -111,6 +129,24 @@ export async function listDataStreams(conn: Connection): Promise<{ ok: boolean; 
     return { ok: false, status: 0, error: msg };
   }
 }
+
+export async function getIndexCount(conn: Connection, index: string): Promise<{ ok: boolean; status: number; count?: number; error?: string }>{
+  try {
+    const baseUrl = getProxiedUrl(conn.url).replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/${encodeURIComponent(index)}/_count`, {
+      method: 'GET',
+      headers: { ...buildHeaders(conn), 'Accept': 'application/json' },
+    });
+    if (!res.ok) return { ok: false, status: res.status, error: await res.text() };
+    const json: unknown = await res.json();
+    const count = (json && typeof json === 'object' && 'count' in json) ? Number((json as { count: unknown }).count) : 0;
+    return { ok: true, status: res.status, count };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Network error';
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
 function sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 export async function bulkInsert(
@@ -119,7 +155,7 @@ export async function bulkInsert(
   docs: unknown[],
   chunkSize = 1000,
   options?: { onProgress?: (info: { processed: number; total: number; chunkIndex: number; chunkCount: number; succeeded: number; failed: number }) => void; signal?: AbortSignal; maxRetries?: number; initialDelayMs?: number }
-): Promise<{ ok: boolean; status: number; errors?: boolean; items?: number; succeeded?: number; failed?: number; error?: string }>{
+): Promise<{ ok: boolean; status: number; errors?: boolean; items?: number; succeeded?: number; failed?: number; error?: string; errorDetails?: Array<{ index: number; error: string; doc: unknown }> }>{
   const base = getProxiedUrl(conn.url).replace(/\/$/, '');
   const total = docs.length;
   const maxBulk = 10000;
@@ -131,6 +167,7 @@ export async function bulkInsert(
   let processed = 0;
   let succeededTotal = 0;
   let failedTotal = 0;
+  const errorDetails: Array<{ index: number; error: string; doc: unknown }> = [];
   try {
     const chunkCount = Math.ceil(total / cs);
     for (let off = 0, chunkIndex = 0; off < total; off += cs, chunkIndex++) {
@@ -192,7 +229,17 @@ export async function bulkInsert(
             fail++;
             const type = err?.type || err?.caused_by?.type;
             const reason = err?.reason || '';
+            const causedBy = err?.caused_by ? ` Caused by: ${err.caused_by.type}: ${err.caused_by.reason}` : '';
             const transient = status === 429 || status === 503 || String(type).includes('rejected') || /EsRejectedExecutionException/i.test(reason);
+            
+            // Collect error details
+            const globalIndex = off + i;
+            errorDetails.push({
+              index: globalIndex,
+              error: `[${status}] ${type || 'error'}: ${reason}${causedBy}`,
+              doc: docs[globalIndex]
+            });
+            
             if (transient) {
               retryDocs.push(chunk[i]);
             }
@@ -202,6 +249,12 @@ export async function bulkInsert(
         failedTotal += fail;
         processed += chunk.length;
         if (onProgress) onProgress({ processed, total, chunkIndex, chunkCount, succeeded: succeededTotal, failed: failedTotal });
+        
+        // Minimal delay only for very large batches to prevent UI freezing
+        if (chunkIndex < chunkCount - 1 && chunkIndex % 10 === 0) {
+          await sleep(10); // 10ms delay every 10 chunks for UI responsiveness
+        }
+        
         if (retryDocs.length > 0 && attempt < maxRetries) {
           // Retry only transient failed docs
           chunk = retryDocs;
@@ -214,10 +267,10 @@ export async function bulkInsert(
         break;
       }
     }
-    return { ok: true, status: 200, errors: failedTotal > 0, items: total, succeeded: succeededTotal, failed: failedTotal };
+    return { ok: true, status: 200, errors: failedTotal > 0, items: total, succeeded: succeededTotal, failed: failedTotal, errorDetails: errorDetails.length > 0 ? errorDetails : undefined };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : 'Network error';
-    return { ok: false, status: 0, errors: true, items: processed, succeeded: succeededTotal, failed: failedTotal, error: msg };
+    return { ok: false, status: 0, errors: true, items: processed, succeeded: succeededTotal, failed: failedTotal, error: msg, errorDetails: errorDetails.length > 0 ? errorDetails : undefined };
   }
 }
 
