@@ -1,3 +1,5 @@
+import { faker } from '@faker-js/faker';
+
 type FieldType = 'keyword' | 'text' | 'date' | 'float' | 'double' | 'integer' | 'short' | 'long' | 'boolean' | 'geo_point' | 'ip' | 'object';
 
 type Properties = Record<string, { type?: FieldType; format?: string; properties?: Properties }>;
@@ -43,7 +45,17 @@ export type StringListRule = { kind: 'string_list'; values: string[] };
 export type ImagePathRule = { kind: 'image_path'; mode: 'static' | 'list' | 'random'; path?: string; values?: string[]; base?: string; ext?: string };
 export type IpRule = { kind: 'ip'; version: 'v4' | 'v6' };
 export type PrefixRule = { kind: 'prefix'; prefix: string };
-export type PhoneRule = { kind: 'phone'; country: 'US' | 'IN' | 'GB' };
+export type PhoneRule = { kind: 'phone'; country: 
+  'US' | 'GB' | 'IN' | 'CN' | 'JP' | 'DE' | 'FR' | 'IT' | 'ES' | 'CA' | 
+  'AU' | 'BR' | 'MX' | 'RU' | 'KR' | 'ID' | 'TR' | 'SA' | 'AE' | 'EG' | 
+  'ZA' | 'NG' | 'KE' | 'TH' | 'VN' | 'PH' | 'MY' | 'SG' | 'NZ' | 'AR' | 
+  'CL' | 'CO' | 'PE' | 'VE' | 'PL' | 'NL' | 'BE' | 'SE' | 'NO' | 'DK' | 
+  'FI' | 'CH' | 'AT' | 'PT' | 'GR' | 'IE' | 'CZ' | 'RO' | 'HU' | 'IL' | 
+  'PK' | 'BD' | 'LK' | 'NP' | 'MM' | 'KH' | 'LA' | 'UZ' | 'KZ' | 'UA' | 
+  'BY' | 'GE' | 'AZ' | 'AM' | 'JO' | 'LB' | 'KW' | 'QA' | 'BH' | 'OM' | 
+  'MA' | 'DZ' | 'TN' | 'LY' | 'SD' | 'GH' | 'CI' | 'SN' | 'UG' | 'TZ' | 
+  'ET' | 'ZM' | 'ZW' | 'MZ' | 'AO' | 'CM' | 'CD' | 'MG' | 'ML' | 'NE' | 
+  'BF' | 'BJ' | 'TG' | 'SL' | 'LR' | 'GN' | 'GW' | 'GM' | 'MR' };
 export type ManualRule = { kind: 'manual'; value: unknown };
 export type GeohashRule = { kind: 'geohash'; precision: number };
 export type GeoCityRule = { kind: 'geo_city'; city: string };
@@ -62,11 +74,266 @@ function randomIPv6() {
   const seg = () => randInt(0, 0xffff).toString(16);
   return `${seg()}:${seg()}:${seg()}:${seg()}:${seg()}:${seg()}:${seg()}:${seg()}`;
 }
+
+// Generate valid IMEI (International Mobile Equipment Identity)
+// Format: 15 digits - TAC (8) + SNR (6) + Check Digit (1)
+function generateIMEI(): string {
+  // TAC (Type Allocation Code) - first 8 digits
+  const tac = String(randInt(35000000, 35999999)); // Using common TAC range
+  
+  // Serial Number - next 6 digits
+  const snr = String(randInt(100000, 999999));
+  
+  // Calculate Luhn check digit
+  const imeiWithoutCheck = tac + snr;
+  let sum = 0;
+  for (let i = 0; i < imeiWithoutCheck.length; i++) {
+    let digit = parseInt(imeiWithoutCheck[i]);
+    if (i % 2 === 1) { // Double every second digit
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+  }
+  const checkDigit = (10 - (sum % 10)) % 10;
+  
+  return imeiWithoutCheck + checkDigit;
+}
+
+// Generate valid IMSI (International Mobile Subscriber Identity)
+// Format: 15 digits - MCC (3) + MNC (2-3) + MSIN (9-10)
+function generateIMSI(): string {
+  // MCC (Mobile Country Code) - 3 digits
+  const mccs = ['310', '311', '262', '208', '234', '404', '460', '440', '510', '525', '250', '510']; // US, DE, FR, GB, IN, CN, JP, KR, ID, SG, RU, TH
+  const mcc = mccs[randInt(0, mccs.length - 1)];
+  
+  // MNC (Mobile Network Code) - 2 digits
+  const mnc = String(randInt(10, 99));
+  
+  // MSIN (Mobile Subscription Identification Number) - 10 digits
+  const msin = String(randInt(1000000000, 9999999999));
+  
+  return mcc + mnc + msin;
+}
+
+// Generate MAC Address
+function generateMACAddress(): string {
+  const hex = () => randInt(0, 255).toString(16).padStart(2, '0');
+  return `${hex()}:${hex()}:${hex()}:${hex()}:${hex()}:${hex()}`;
+}
+
+// Generate UUID
+function generateUUID(): string {
+  const hex = () => randInt(0, 15).toString(16);
+  const segment = (len: number) => Array.from({length: len}, () => hex()).join('');
+  return `${segment(8)}-${segment(4)}-4${segment(3)}-${hex()}${segment(3)}-${segment(12)}`;
+}
+
+// Verhoeff algorithm for checksum calculation (used in UID)
+function verhoeffChecksum(num: string): number {
+  // Multiplication table
+  const d = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
+    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6],
+    [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
+    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8],
+    [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
+    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2],
+    [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
+    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4],
+    [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+  ];
+  
+  // Permutation table
+  const p = [
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
+    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2],
+    [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
+    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0],
+    [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
+    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5],
+    [7, 0, 4, 6, 9, 1, 3, 2, 5, 8]
+  ];
+  
+  // Inverse table
+  const inv = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9];
+  
+  let c = 0;
+  const reversedNum = num.split('').reverse().join('');
+  
+  for (let i = 0; i < reversedNum.length; i++) {
+    c = d[c][p[(i + 1) % 8][parseInt(reversedNum[i])]];
+  }
+  
+  return inv[c];
+}
+
+// Generate UID (12-digit with Verhoeff checksum)
+// Format: 12-digit number with last digit as checksum
+function generateUID(): string {
+  // Generate first 11 digits
+  const firstDigit = randInt(1, 9); // First digit should not be 0
+  const remainingDigits = Array.from({length: 10}, () => randInt(0, 9)).join('');
+  const uidWithoutChecksum = String(firstDigit) + remainingDigits;
+  
+  // Calculate checksum using Verhoeff algorithm
+  const checksum = verhoeffChecksum(uidWithoutChecksum);
+  
+  return uidWithoutChecksum + checksum;
+}
+
+// Generate EID (Enrolment ID)
+// Format: xxx-xxxx-xxxxxxx-x (3-4-7-1 digits with hyphens, total 15 digits)
+function generateEID(): string {
+  const part1 = String(randInt(100, 999)); // 3 digits
+  const part2 = String(randInt(1000, 9999)); // 4 digits
+  const part3 = String(randInt(1000000, 9999999)); // 7 digits
+  const part4 = String(randInt(0, 9)); // 1 digit
+  
+  return `${part1}-${part2}-${part3}-${part4}`;
+}
+
+// Generate EID with timestamp
+// Returns enrollment number with timestamp: xxx-xxxx-xxxxxxx-x (yyyy/mm/dd hh:mm:ss)
+function generateEIDWithTimestamp(): string {
+  const enrollmentNumber = generateEID();
+  
+  // Generate a random date within the last 5 years
+  const now = new Date();
+  const fiveYearsAgo = new Date(now.getFullYear() - 5, 0, 1);
+  const randomDate = new Date(fiveYearsAgo.getTime() + Math.random() * (now.getTime() - fiveYearsAgo.getTime()));
+  
+  const year = randomDate.getFullYear();
+  const month = String(randomDate.getMonth() + 1).padStart(2, '0');
+  const day = String(randomDate.getDate()).padStart(2, '0');
+  const hours = String(randomDate.getHours()).padStart(2, '0');
+  const minutes = String(randomDate.getMinutes()).padStart(2, '0');
+  const seconds = String(randomDate.getSeconds()).padStart(2, '0');
+  
+  const timestamp = `${year}/${month}/${day} ${hours}:${minutes}:${seconds}`;
+  
+  return `${enrollmentNumber} (${timestamp})`;
+}
 function randomPhone(country: PhoneRule['country']) {
-  if (country === 'US') return `+1-${randInt(200, 999)}-${randInt(200, 999)}-${randInt(1000, 9999)}`;
-  if (country === 'GB') return `+44-${randInt(2000, 9999)}-${randInt(100000, 999999)}`;
-  if (country === 'IN') return `+91-${randInt(60000, 99999)}-${randInt(10000, 99999)}`;
-  return `+1-${randInt(200, 999)}-${randInt(200, 999)}-${randInt(1000, 9999)}`;
+  const formats: Record<PhoneRule['country'], () => string> = {
+    // North America
+    'US': () => `+1-${randInt(200, 999)}-${randInt(200, 999)}-${randInt(1000, 9999)}`,
+    'CA': () => `+1-${randInt(200, 999)}-${randInt(200, 999)}-${randInt(1000, 9999)}`,
+    
+    // Europe
+    'GB': () => `+44-${randInt(20, 79)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'DE': () => `+49-${randInt(30, 89)}-${randInt(10000000, 99999999)}`,
+    'FR': () => `+33-${randInt(1, 9)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'IT': () => `+39-${randInt(300, 399)}-${randInt(1000000, 9999999)}`,
+    'ES': () => `+34-${randInt(600, 799)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'NL': () => `+31-${randInt(6, 6)}-${randInt(10000000, 99999999)}`,
+    'BE': () => `+32-${randInt(470, 499)}-${randInt(100000, 999999)}`,
+    'SE': () => `+46-${randInt(70, 79)}-${randInt(1000000, 9999999)}`,
+    'NO': () => `+47-${randInt(400, 999)}-${randInt(10000, 99999)}`,
+    'DK': () => `+45-${randInt(20, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'FI': () => `+358-${randInt(40, 50)}-${randInt(1000000, 9999999)}`,
+    'CH': () => `+41-${randInt(76, 79)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'AT': () => `+43-${randInt(660, 699)}-${randInt(1000000, 9999999)}`,
+    'PT': () => `+351-${randInt(910, 969)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'GR': () => `+30-${randInt(690, 699)}-${randInt(1000000, 9999999)}`,
+    'IE': () => `+353-${randInt(85, 89)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'PL': () => `+48-${randInt(500, 799)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'CZ': () => `+420-${randInt(600, 799)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'RO': () => `+40-${randInt(720, 789)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'HU': () => `+36-${randInt(20, 30)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'UA': () => `+380-${randInt(50, 99)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'BY': () => `+375-${randInt(29, 44)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'GE': () => `+995-${randInt(550, 599)}-${randInt(100000, 999999)}`,
+    'AZ': () => `+994-${randInt(50, 70)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'AM': () => `+374-${randInt(90, 99)}-${randInt(100000, 999999)}`,
+    
+    // Asia-Pacific
+    'IN': () => `+91-${randInt(70, 99)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'CN': () => `+86-${randInt(130, 189)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'JP': () => `+81-${randInt(70, 90)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'KR': () => `+82-${randInt(10, 19)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'ID': () => `+62-${randInt(811, 899)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'TH': () => `+66-${randInt(80, 99)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'VN': () => `+84-${randInt(90, 99)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'PH': () => `+63-${randInt(900, 999)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'MY': () => `+60-${randInt(10, 19)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'SG': () => `+65-${randInt(8000, 9999)}-${randInt(1000, 9999)}`,
+    'AU': () => `+61-${randInt(4, 4)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'NZ': () => `+64-${randInt(20, 29)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'PK': () => `+92-${randInt(300, 349)}-${randInt(1000000, 9999999)}`,
+    'BD': () => `+880-${randInt(1700, 1999)}-${randInt(100000, 999999)}`,
+    'LK': () => `+94-${randInt(70, 77)}-${randInt(1000000, 9999999)}`,
+    'NP': () => `+977-${randInt(980, 986)}-${randInt(1000000, 9999999)}`,
+    'MM': () => `+95-${randInt(9, 9)}-${randInt(100000000, 999999999)}`,
+    'KH': () => `+855-${randInt(10, 99)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'LA': () => `+856-${randInt(20, 20)}-${randInt(10000000, 99999999)}`,
+    'UZ': () => `+998-${randInt(90, 99)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'KZ': () => `+7-${randInt(700, 778)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    
+    // Middle East
+    'IL': () => `+972-${randInt(50, 59)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'SA': () => `+966-${randInt(50, 59)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'AE': () => `+971-${randInt(50, 56)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'TR': () => `+90-${randInt(530, 559)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'EG': () => `+20-${randInt(100, 129)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'JO': () => `+962-${randInt(7, 7)}-${randInt(9000, 9999)}-${randInt(1000, 9999)}`,
+    'LB': () => `+961-${randInt(3, 7)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'KW': () => `+965-${randInt(5000, 6999)}-${randInt(1000, 9999)}`,
+    'QA': () => `+974-${randInt(3000, 7999)}-${randInt(1000, 9999)}`,
+    'BH': () => `+973-${randInt(3000, 3999)}-${randInt(1000, 9999)}`,
+    'OM': () => `+968-${randInt(9000, 9999)}-${randInt(1000, 9999)}`,
+    
+    // Africa
+    'ZA': () => `+27-${randInt(60, 89)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'NG': () => `+234-${randInt(800, 909)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'KE': () => `+254-${randInt(700, 799)}-${randInt(100000, 999999)}`,
+    'GH': () => `+233-${randInt(20, 59)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'CI': () => `+225-${randInt(40, 79)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'SN': () => `+221-${randInt(70, 78)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'UG': () => `+256-${randInt(700, 799)}-${randInt(100000, 999999)}`,
+    'TZ': () => `+255-${randInt(60, 79)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'ET': () => `+251-${randInt(91, 94)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'ZM': () => `+260-${randInt(95, 97)}-${randInt(1000000, 9999999)}`,
+    'ZW': () => `+263-${randInt(71, 78)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'MZ': () => `+258-${randInt(82, 87)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'AO': () => `+244-${randInt(910, 949)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'CM': () => `+237-${randInt(6, 6)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'CD': () => `+243-${randInt(800, 999)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'MG': () => `+261-${randInt(30, 34)}-${randInt(10, 99)}-${randInt(100, 999)}-${randInt(10, 99)}`,
+    'ML': () => `+223-${randInt(60, 79)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'NE': () => `+227-${randInt(90, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'BF': () => `+226-${randInt(50, 79)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'BJ': () => `+229-${randInt(90, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'TG': () => `+228-${randInt(90, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'SL': () => `+232-${randInt(30, 88)}-${randInt(100000, 999999)}`,
+    'LR': () => `+231-${randInt(70, 88)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'GN': () => `+224-${randInt(600, 669)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'GW': () => `+245-${randInt(5, 7)}-${randInt(100000, 999999)}`,
+    'GM': () => `+220-${randInt(300, 799)}-${randInt(1000, 9999)}`,
+    'MR': () => `+222-${randInt(20, 49)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'MA': () => `+212-${randInt(6, 7)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'DZ': () => `+213-${randInt(5, 7)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+    'TN': () => `+216-${randInt(20, 99)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'LY': () => `+218-${randInt(91, 94)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'SD': () => `+249-${randInt(90, 99)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    
+    // Latin America
+    'BR': () => `+55-${randInt(11, 99)}-${randInt(90000, 99999)}-${randInt(1000, 9999)}`,
+    'MX': () => `+52-${randInt(55, 99)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'AR': () => `+54-${randInt(11, 11)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'CL': () => `+56-${randInt(9, 9)}-${randInt(1000, 9999)}-${randInt(1000, 9999)}`,
+    'CO': () => `+57-${randInt(300, 320)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    'PE': () => `+51-${randInt(900, 999)}-${randInt(100, 999)}-${randInt(100, 999)}`,
+    'VE': () => `+58-${randInt(412, 426)}-${randInt(100, 999)}-${randInt(1000, 9999)}`,
+    
+    // Russia and CIS
+    'RU': () => `+7-${randInt(900, 999)}-${randInt(100, 999)}-${randInt(10, 99)}-${randInt(10, 99)}`,
+  };
+  
+  const generator = formats[country];
+  return generator ? generator() : formats['US']();
 }
 
 const base32 = '0123456789bcdefghjkmnpqrstuvwxyz';
@@ -266,10 +533,244 @@ export const VEHICLE_LOCATIONS: { name: string; lat: number; lon: number; type: 
 ];
 
 const DOGS = ['Bella', 'Charlie', 'Max', 'Luna', 'Rocky', 'Milo', 'Buddy', 'Coco'];
-const COUNTRIES = ['United States', 'United Kingdom', 'France', 'Germany', 'India', 'Japan', 'China', 'Singapore', 'Australia', 'Brazil'];
-const COUNTRY_CODES = ['US', 'GB', 'FR', 'DE', 'IN', 'JP', 'CN', 'SG', 'AU', 'BR'];
+const COUNTRIES = ['United States', 'United Kingdom', 'France', 'Germany', 'India', 'Japan', 'China', 'Singapore', 'Australia', 'Brazil', 
+                   'Canada', 'Mexico', 'Brazil', 'Argentina', 'Spain', 'Italy', 'Netherlands', 'Russia', 'South Korea', 'Indonesia',
+                   'Thailand', 'Vietnam', 'Philippines', 'Malaysia', 'UAE', 'Saudi Arabia', 'Egypt', 'South Africa', 'Nigeria', 'Kenya'];
+const COUNTRY_CODES = ['US', 'GB', 'FR', 'DE', 'IN', 'JP', 'CN', 'SG', 'AU', 'BR', 
+                       'CA', 'MX', 'AR', 'ES', 'IT', 'NL', 'RU', 'KR', 'ID', 'TH',
+                       'VN', 'PH', 'MY', 'AE', 'SA', 'EG', 'ZA', 'NG', 'KE'];
+
+// Occupations/Jobs list
+const OCCUPATIONS = [
+  'Software Engineer', 'Data Scientist', 'Product Manager', 'Business Analyst', 'UX Designer',
+  'Teacher', 'Doctor', 'Nurse', 'Lawyer', 'Accountant', 'Architect', 'Civil Engineer',
+  'Marketing Manager', 'Sales Representative', 'Financial Analyst', 'Consultant', 'Project Manager',
+  'Chef', 'Mechanic', 'Electrician', 'Plumber', 'Carpenter', 'Construction Worker',
+  'Police Officer', 'Firefighter', 'Pilot', 'Flight Attendant', 'Driver', 'Security Guard',
+  'Pharmacist', 'Dentist', 'Veterinarian', 'Scientist', 'Researcher', 'Journalist', 'Writer',
+  'Graphic Designer', 'Photographer', 'Artist', 'Musician', 'Actor', 'Athlete',
+  'Real Estate Agent', 'Insurance Agent', 'Bank Teller', 'Cashier', 'Receptionist', 'Secretary',
+  'HR Manager', 'Recruiter', 'IT Support', 'Network Administrator', 'Database Administrator',
+  'Customer Service Representative', 'Call Center Agent', 'Retail Manager', 'Store Manager',
+  'Operations Manager', 'Supply Chain Manager', 'Logistics Coordinator', 'Warehouse Manager'
+];
 const FIRST_NAMES = ['Alice', 'Bob', 'Charlie', 'Diana', 'Ethan', 'Fiona', 'George', 'Hannah'];
 const LAST_NAMES = ['Smith', 'Johnson', 'Brown', 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White'];
+
+// Multi-language name mappings - CORRESPONDING names (same person, different language)
+// Index 0 in all arrays = Alice/أليس/Alice/Alice, etc.
+const FIRST_NAMES_AR = ['أليس', 'بوب', 'تشارلي', 'ديانا', 'إيثان', 'فيونا', 'جورج', 'هانا'];
+const LAST_NAMES_AR = ['سميث', 'جونسون', 'براون', 'تايلور', 'أندرسون', 'توماس', 'جاكسون', 'وايت'];
+const FIRST_NAMES_FR = ['Alice', 'Bob', 'Charlie', 'Diane', 'Étienne', 'Fiona', 'Georges', 'Hannah'];
+const LAST_NAMES_FR = ['Smith', 'Johnson', 'Brown', 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White'];
+const FIRST_NAMES_ES = ['Alicia', 'Roberto', 'Carlos', 'Diana', 'Ethan', 'Fiona', 'Jorge', 'Ana'];
+const LAST_NAMES_ES = ['Smith', 'Johnson', 'Brown', 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White'];
+const FIRST_NAMES_DE = ['Alice', 'Bob', 'Charlie', 'Diana', 'Ethan', 'Fiona', 'Georg', 'Hannah'];
+const LAST_NAMES_DE = ['Schmidt', 'Johnson', 'Braun', 'Schneider', 'Anderson', 'Thomas', 'Wagner', 'Weiss'];
+const FIRST_NAMES_ZH = ['爱丽丝', '鲍勃', '查理', '戴安娜', '伊桑', '菲奥娜', '乔治', '汉娜'];
+const LAST_NAMES_ZH = ['史密斯', '约翰逊', '布朗', '泰勒', '安德森', '托马斯', '杰克逊', '怀特'];
+const FIRST_NAMES_JA = ['アリス', 'ボブ', 'チャーリー', 'ダイアナ', 'イーサン', 'フィオナ', 'ジョージ', 'ハンナ'];
+const LAST_NAMES_JA = ['スミス', 'ジョンソン', 'ブラウン', 'テイラー', 'アンダーソン', 'トーマス', 'ジャクソン', 'ホワイト'];
+const FIRST_NAMES_RU = ['Элис', 'Боб', 'Чарли', 'Диана', 'Итан', 'Фиона', 'Джордж', 'Ханна'];
+const LAST_NAMES_RU = ['Смит', 'Джонсон', 'Браун', 'Тейлор', 'Андерсон', 'Томас', 'Джексон', 'Уайт'];
+
+// Multi-language city/place names - CORRESPONDING (same city, different language)
+// Using major international cities that appear in CITIES array
+const CITIES_EN_FOR_TRANSLATION = ['New York', 'London', 'Paris', 'Tokyo', 'Dubai', 'Singapore', 'Sydney', 'Mumbai'];
+const CITIES_AR = ['نيويورك', 'لندن', 'باريس', 'طوكيو', 'دبي', 'سنغافورة', 'سيدني', 'مومباي'];
+const CITIES_FR = ['New York', 'Londres', 'Paris', 'Tokyo', 'Dubaï', 'Singapour', 'Sydney', 'Mumbai'];
+const CITIES_ES = ['Nueva York', 'Londres', 'París', 'Tokio', 'Dubái', 'Singapur', 'Sídney', 'Bombay'];
+const CITIES_DE = ['New York', 'London', 'Paris', 'Tokio', 'Dubai', 'Singapur', 'Sydney', 'Mumbai'];
+const CITIES_ZH = ['纽约', '伦敦', '巴黎', '东京', '迪拜', '新加坡', '悉尼', '孟买'];
+
+// Multi-language common words - CORRESPONDING
+// Status words corresponding to: Active, Inactive, Pending, Completed, Cancelled
+const STATUS_EN = ['Active', 'Inactive', 'Pending', 'Completed', 'Cancelled'];
+const STATUS_AR = ['نشط', 'غير نشط', 'معلق', 'مكتمل', 'ملغي'];
+const STATUS_FR = ['Actif', 'Inactif', 'En attente', 'Terminé', 'Annulé'];
+const STATUS_ES = ['Activo', 'Inactivo', 'Pendiente', 'Completado', 'Cancelado'];
+const STATUS_DE = ['Aktiv', 'Inaktiv', 'Ausstehend', 'Abgeschlossen', 'Storniert'];
+const STATUS_ZH = ['活跃', '不活跃', '待定', '已完成', '已取消'];
+
+// Department words corresponding to: Sales, Marketing, Engineering, HR, Finance, Operations, IT, Customer Service
+const DEPARTMENTS_EN = ['Sales', 'Marketing', 'Engineering', 'HR', 'Finance', 'Operations', 'IT', 'Customer Service'];
+const DEPARTMENTS_AR = ['المبيعات', 'التسويق', 'الهندسة', 'الموارد البشرية', 'المالية', 'العمليات', 'تقنية المعلومات', 'خدمة العملاء'];
+const DEPARTMENTS_FR = ['Ventes', 'Marketing', 'Ingénierie', 'RH', 'Finance', 'Opérations', 'IT', 'Service Client'];
+const DEPARTMENTS_ES = ['Ventas', 'Marketing', 'Ingeniería', 'RRHH', 'Finanzas', 'Operaciones', 'IT', 'Atención al Cliente'];
+const DEPARTMENTS_DE = ['Vertrieb', 'Marketing', 'Technik', 'HR', 'Finanzen', 'Betrieb', 'IT', 'Kundenservice'];
+const DEPARTMENTS_ZH = ['销售', '市场营销', '工程', '人力资源', '财务', '运营', '信息技术', '客户服务'];
+
+// Language suffix detection
+const LANG_SUFFIXES = ['_en', '_ar', '_fr', '_es', '_de', '_zh', '_ja', '_ru', '_it', '_pt', '_nl', '_tr', '_hi', '_ko'];
+
+// Detect if a field has a language suffix and return the base name and language
+function detectLanguageField(fieldName: string): { baseName: string; lang: string } | null {
+  const lower = fieldName.toLowerCase();
+  for (const suffix of LANG_SUFFIXES) {
+    if (lower.endsWith(suffix)) {
+      return {
+        baseName: fieldName.substring(0, fieldName.length - suffix.length),
+        lang: suffix.substring(1) // Remove the '_' prefix
+      };
+    }
+  }
+  return null;
+}
+
+// Get translated name based on language - Use Faker for English, keep arrays for other languages for consistency
+function getTranslatedName(type: 'first' | 'last' | 'full', lang: string, seed?: number): string {
+  // Use seed for consistent multi-language matching
+  if (seed !== undefined) {
+    faker.seed(seed);
+  }
+  
+  switch (lang) {
+    case 'ar':
+      const idxAr = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_AR[idxAr];
+      if (type === 'last') return LAST_NAMES_AR[idxAr];
+      return `${FIRST_NAMES_AR[idxAr]} ${LAST_NAMES_AR[idxAr]}`;
+    case 'fr':
+      const idxFr = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_FR[idxFr];
+      if (type === 'last') return LAST_NAMES_FR[idxFr];
+      return `${FIRST_NAMES_FR[idxFr]} ${LAST_NAMES_FR[idxFr]}`;
+    case 'es':
+      const idxEs = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_ES[idxEs];
+      if (type === 'last') return LAST_NAMES_ES[idxEs];
+      return `${FIRST_NAMES_ES[idxEs]} ${LAST_NAMES_ES[idxEs]}`;
+    case 'de':
+      const idxDe = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_DE[idxDe];
+      if (type === 'last') return LAST_NAMES_DE[idxDe];
+      return `${FIRST_NAMES_DE[idxDe]} ${LAST_NAMES_DE[idxDe]}`;
+    case 'zh':
+      const idxZh = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_ZH[idxZh];
+      if (type === 'last') return LAST_NAMES_ZH[idxZh];
+      return `${LAST_NAMES_ZH[idxZh]}${FIRST_NAMES_ZH[idxZh]}`;
+    case 'ja':
+      const idxJa = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_JA[idxJa];
+      if (type === 'last') return LAST_NAMES_JA[idxJa];
+      return `${LAST_NAMES_JA[idxJa]} ${FIRST_NAMES_JA[idxJa]}`;
+    case 'ru':
+      const idxRu = seed !== undefined ? seed % 8 : randInt(0, 7);
+      if (type === 'first') return FIRST_NAMES_RU[idxRu];
+      if (type === 'last') return LAST_NAMES_RU[idxRu];
+      return `${FIRST_NAMES_RU[idxRu]} ${LAST_NAMES_RU[idxRu]}`;
+    case 'en':
+    default:
+      // Use Faker for English names
+      if (type === 'first') return faker.person.firstName();
+      if (type === 'last') return faker.person.lastName();
+      return faker.person.fullName();
+  }
+}
+
+// Get translated city based on language - Use Faker for English
+function getTranslatedCity(lang: string, seed?: number): string {
+  if (seed !== undefined) {
+    faker.seed(seed);
+  }
+  
+  switch (lang) {
+    case 'ar':
+      const idxAr = seed !== undefined ? seed % CITIES_AR.length : randInt(0, CITIES_AR.length - 1);
+      return CITIES_AR[idxAr];
+    case 'fr':
+      const idxFr = seed !== undefined ? seed % CITIES_FR.length : randInt(0, CITIES_FR.length - 1);
+      return CITIES_FR[idxFr];
+    case 'es':
+      const idxEs = seed !== undefined ? seed % CITIES_ES.length : randInt(0, CITIES_ES.length - 1);
+      return CITIES_ES[idxEs];
+    case 'de':
+      const idxDe = seed !== undefined ? seed % CITIES_DE.length : randInt(0, CITIES_DE.length - 1);
+      return CITIES_DE[idxDe];
+    case 'zh':
+      const idxZh = seed !== undefined ? seed % CITIES_ZH.length : randInt(0, CITIES_ZH.length - 1);
+      return CITIES_ZH[idxZh];
+    case 'en':
+    default:
+      // Use Faker for English cities
+      return faker.location.city();
+  }
+}
+
+// Get translated status based on language
+function getTranslatedStatus(lang: string, seed?: number): string {
+  const idx = seed !== undefined ? seed : randInt(0, 4);
+  
+  switch (lang) {
+    case 'ar': return STATUS_AR[Math.min(idx, STATUS_AR.length - 1)];
+    case 'fr': return STATUS_FR[Math.min(idx, STATUS_FR.length - 1)];
+    case 'es': return STATUS_ES[Math.min(idx, STATUS_ES.length - 1)];
+    case 'de': return STATUS_DE[Math.min(idx, STATUS_DE.length - 1)];
+    case 'zh': return STATUS_ZH[Math.min(idx, STATUS_ZH.length - 1)];
+    case 'en':
+    default:
+      return STATUS_EN[idx];
+  }
+}
+
+// Get translated product name based on language - Use Faker for English
+function getTranslatedProduct(lang: string, seed?: number): string {
+  if (seed !== undefined) {
+    faker.seed(seed);
+  }
+  
+  switch (lang) {
+    case 'ar':
+      const numAr = seed !== undefined ? (seed % 900) + 100 : randInt(100, 999);
+      return `منتج ${numAr}`;
+    case 'fr':
+      const numFr = seed !== undefined ? (seed % 900) + 100 : randInt(100, 999);
+      return `Produit ${numFr}`;
+    case 'es':
+      const numEs = seed !== undefined ? (seed % 900) + 100 : randInt(100, 999);
+      return `Producto ${numEs}`;
+    case 'de':
+      const numDe = seed !== undefined ? (seed % 900) + 100 : randInt(100, 999);
+      return `Produkt ${numDe}`;
+    case 'zh':
+      const numZh = seed !== undefined ? (seed % 900) + 100 : randInt(100, 999);
+      return `产品 ${numZh}`;
+    case 'en':
+    default:
+      // Use Faker for English product names
+      return faker.commerce.productName();
+  }
+}
+
+// Get translated department based on language - Use Faker for English
+function getTranslatedDepartment(lang: string, seed?: number): string {
+  if (seed !== undefined) {
+    faker.seed(seed);
+  }
+  
+  switch (lang) {
+    case 'ar':
+      const idxAr = seed !== undefined ? seed % DEPARTMENTS_AR.length : randInt(0, DEPARTMENTS_AR.length - 1);
+      return DEPARTMENTS_AR[idxAr];
+    case 'fr':
+      const idxFr = seed !== undefined ? seed % DEPARTMENTS_FR.length : randInt(0, DEPARTMENTS_FR.length - 1);
+      return DEPARTMENTS_FR[idxFr];
+    case 'es':
+      const idxEs = seed !== undefined ? seed % DEPARTMENTS_ES.length : randInt(0, DEPARTMENTS_ES.length - 1);
+      return DEPARTMENTS_ES[idxEs];
+    case 'de':
+      const idxDe = seed !== undefined ? seed % DEPARTMENTS_DE.length : randInt(0, DEPARTMENTS_DE.length - 1);
+      return DEPARTMENTS_DE[idxDe];
+    case 'zh':
+      const idxZh = seed !== undefined ? seed % DEPARTMENTS_ZH.length : randInt(0, DEPARTMENTS_ZH.length - 1);
+      return DEPARTMENTS_ZH[idxZh];
+    case 'en':
+    default:
+      // Use Faker for English departments
+      return faker.commerce.department();
+  }
+}
 const IATA_CODES = ['JFK', 'SFO', 'LHR', 'CDG', 'BOM', 'NRT', 'DEL', 'LAX', 'ORD', 'DXB', 'SIN', 'HKG', 'ICN', 'SYD'];
 const ICAO_CODES = ['KJFK', 'KSFO', 'EGLL', 'LFPG', 'VABB', 'RJAA', 'VIDP', 'KLAX', 'KORD', 'OMDB', 'WSSS', 'VHHH', 'RKSI', 'YSSY'];
 const VESSEL_NAMES = ['Pacific Explorer', 'Atlantic Star', 'Ocean Navigator', 'Sea Voyager', 'Marine Pioneer', 'Global Trader', 'Container Express', 'Cargo Master'];
@@ -294,22 +795,424 @@ function generateLicensePlate(): string {
   }
 }
 
-function smartStringForField(key: string): string | null {
+// Smart number generation based on field name semantics - Enhanced with Faker
+function smartNumberForField(key: string, isInteger: boolean): number | null {
   const n = key.toLowerCase();
-  if (n.includes('dog')) return DOGS[randInt(0, DOGS.length - 1)];
-  if (n.includes('first') && n.includes('name')) return FIRST_NAMES[randInt(0, FIRST_NAMES.length - 1)];
-  if (n.includes('last') && n.includes('name')) return LAST_NAMES[randInt(0, LAST_NAMES.length - 1)];
-  if (n.includes('full') && n.includes('name')) return `${FIRST_NAMES[randInt(0, FIRST_NAMES.length - 1)]} ${LAST_NAMES[randInt(0, LAST_NAMES.length - 1)]}`;
-  if (n.includes('city')) return CITIES[randInt(0, CITIES.length - 1)].name;
-  if (n.includes('country') && n.includes('code')) return COUNTRY_CODES[randInt(0, COUNTRY_CODES.length - 1)];
-  if (n.includes('country')) return COUNTRIES[randInt(0, COUNTRIES.length - 1)];
-  if (n.includes('place') || n.includes('location')) return CITIES[randInt(0, CITIES.length - 1)].name;
-  if (n.includes('email')) return `${randString(8)}@example.com`;
-  if (n.includes('url') || n.includes('link')) return `https://example.com/${randString(12)}`;
-  if (n.includes('image') || n.includes('photo') || n.includes('avatar') || n.includes('picture')) return `/images/${randString(12)}.jpg`;
+  
+  // Age-related fields - Use Faker
+  if (n === 'age' || n.includes('_age') || n.includes('age_')) {
+    return faker.number.int({ min: 1, max: 100 });
+  }
+  if (n.includes('birth') && n.includes('year')) {
+    return faker.date.birthdate({ min: 1920, max: 2024, mode: 'year' }).getFullYear();
+  }
+  
+  // Quantity and count fields - Use Faker
+  if (n.includes('quantity') || n.includes('qty')) {
+    return faker.number.int({ min: 1, max: 100 });
+  }
+  if (n.includes('count')) {
+    return faker.number.int({ min: 0, max: 1000 });
+  }
+  if (n.includes('stock') || n.includes('inventory')) {
+    return faker.number.int({ min: 0, max: 500 });
+  }
+  
+  // Percentage fields - Use Faker
+  if (n.includes('percent') || n.includes('percentage') || n.includes('rate')) {
+    return isInteger ? faker.number.int({ min: 0, max: 100 }) : faker.number.float({ min: 0, max: 100, fractionDigits: 2 });
+  }
+  if (n.includes('score') && !n.includes('credit')) {
+    return isInteger ? faker.number.int({ min: 0, max: 100 }) : faker.number.float({ min: 0, max: 100, fractionDigits: 2 });
+  }
+  
+  // Price and financial fields - Use Faker
+  if (n.includes('price') || n.includes('cost') || n.includes('amount')) {
+    return isInteger ? faker.number.int({ min: 10, max: 10000 }) : faker.commerce.price({ min: 10, max: 10000, dec: 2 });
+  }
+  if (n.includes('salary') || n.includes('wage')) {
+    return isInteger ? faker.number.int({ min: 30000, max: 150000 }) : faker.number.float({ min: 30000, max: 150000, fractionDigits: 2 });
+  }
+  if (n.includes('revenue') || n.includes('income')) {
+    return isInteger ? faker.number.int({ min: 10000, max: 1000000 }) : faker.number.float({ min: 10000, max: 1000000, fractionDigits: 2 });
+  }
+  
+  // Weight and measurement fields - Use Faker
+  if (n.includes('weight')) {
+    if (n.includes('kg') || n.includes('kilo')) {
+      return isInteger ? faker.number.int({ min: 40, max: 150 }) : faker.number.float({ min: 40, max: 150, fractionDigits: 1 });
+    } else if (n.includes('lb') || n.includes('pound')) {
+      return isInteger ? faker.number.int({ min: 90, max: 330 }) : faker.number.float({ min: 90, max: 330, fractionDigits: 1 });
+    }
+    return isInteger ? faker.number.int({ min: 1, max: 200 }) : faker.number.float({ min: 1, max: 200, fractionDigits: 1 });
+  }
+  if (n.includes('height')) {
+    if (n.includes('cm') || n.includes('centimeter')) {
+      return isInteger ? faker.number.int({ min: 150, max: 200 }) : faker.number.float({ min: 150, max: 200, fractionDigits: 1 });
+    } else if (n.includes('m') || n.includes('meter')) {
+      return isInteger ? faker.number.int({ min: 1, max: 2 }) : faker.number.float({ min: 1.5, max: 2.0, fractionDigits: 2 });
+    } else if (n.includes('ft') || n.includes('feet') || n.includes('inch')) {
+      return isInteger ? faker.number.int({ min: 60, max: 78 }) : faker.number.float({ min: 60, max: 78, fractionDigits: 1 });
+    }
+    return isInteger ? faker.number.int({ min: 150, max: 200 }) : faker.number.float({ min: 150, max: 200, fractionDigits: 1 });
+  }
+  if (n.includes('distance')) {
+    return isInteger ? faker.number.int({ min: 1, max: 1000 }) : faker.number.float({ min: 1, max: 1000, fractionDigits: 2 });
+  }
+  
+  // Temperature fields - Use Faker
+  if (n.includes('temp') || n.includes('temperature')) {
+    return isInteger ? faker.number.int({ min: -20, max: 50 }) : faker.number.float({ min: -20, max: 50, fractionDigits: 1 });
+  }
+  
+  // Duration fields - Use Faker
+  if (n.includes('duration') || n.includes('time') && (n.includes('elapsed') || n.includes('spent'))) {
+    return isInteger ? faker.number.int({ min: 1, max: 3600 }) : faker.number.float({ min: 1, max: 3600, fractionDigits: 2 });
+  }
+  
+  // Speed fields - Use Faker
+  if (n.includes('speed') || n.includes('velocity')) {
+    return isInteger ? faker.number.int({ min: 0, max: 300 }) : faker.number.float({ min: 0, max: 300, fractionDigits: 1 });
+  }
+  
+  // Rating fields - Use Faker
+  if (n.includes('rating')) {
+    return isInteger ? faker.number.int({ min: 1, max: 5 }) : faker.number.float({ min: 1, max: 5, fractionDigits: 1 });
+  }
+  
+  // Priority fields - Use Faker
+  if (n.includes('priority')) {
+    return faker.number.int({ min: 1, max: 5 });
+  }
+  
+  // Special ID formats - UID and EID
+  if (n === 'uid' || n === 'user_id' && n.includes('uid') || n.includes('aadhaar') || n.includes('aadhar')) {
+    return generateUID(); // 12-digit with Verhoeff checksum
+  }
+  if (n === 'eid' || n.includes('enrol') && n.includes('id') || n.includes('enrollment') && n.includes('id')) {
+    if (n.includes('timestamp') || n.includes('full') || n.includes('detail')) {
+      return generateEIDWithTimestamp(); // EID with timestamp
+    }
+    return generateEID(); // Just the enrollment number
+  }
+  
+  // Passport and ID numbers - Use Faker
+  if (n.includes('passport') && (n.includes('number') || n.includes('no'))) {
+    return faker.string.alphanumeric({ length: 9, casing: 'upper' });
+  }
+  if (n.includes('ssn') || n.includes('social') && n.includes('security')) {
+    return faker.string.numeric({ length: 9, allowLeadingZeros: true }).replace(/(\d{3})(\d{2})(\d{4})/, '$1-$2-$3');
+  }
+  if (n.includes('national') && n.includes('id')) {
+    return faker.string.numeric({ length: 13 });
+  }
+  if (n.includes('tax') && n.includes('id')) {
+    return faker.string.numeric({ length: 9 }).replace(/(\d{2})(\d{7})/, '$1-$2');
+  }
+  
+  // Special numeric IDs - UID as number (without formatting)
+  if (n === 'uid' || n.includes('aadhaar') || n.includes('aadhar')) {
+    // Return as number without spaces
+    const uid = generateUID();
+    return parseInt(uid);
+  }
+  
+  // ID fields (numeric) - Use Faker
+  if ((n.includes('id') || n.includes('number') || n.includes('no')) && 
+      !n.includes('phone') && !n.includes('mobile') && !n.includes('passport') && 
+      !n.includes('ssn') && !n.includes('national') && !n.includes('tax')) {
+    return faker.number.int({ min: 10000, max: 999999 });
+  }
+  
+  // Phone/mobile as string numbers
+  if (n.includes('phone') || n.includes('mobile') || n.includes('tel')) {
+    return null; // Handle in string generation
+  }
+  
+  return null;
+}
+
+function smartStringForField(key: string, languageContext?: { baseName: string; lang: string; seed?: number }, englishValueMap?: Record<string, string>): string | null {
+  const n = key.toLowerCase();
+  
+  // Multi-language field handling
+  if (languageContext) {
+    const { baseName, lang, seed } = languageContext;
+    const base = baseName.toLowerCase();
+    
+    // For Arabic fields, ensure we use the same seed as the corresponding English field
+    // This ensures that if name_en = "Charlie Brown", then name_ar = "تشارلي براون" (same person)
+    const effectiveSeed = seed !== undefined ? seed : (englishValueMap && englishValueMap[baseName] ? 
+      // Use hash of English value to get consistent seed
+      Math.abs(englishValueMap[baseName].split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)) % 8 : 
+      randInt(0, 7));
+    
+    // Name fields with language support
+    if (base.includes('first') && base.includes('name')) {
+      return getTranslatedName('first', lang, effectiveSeed);
+    }
+    if (base.includes('last') && base.includes('name')) {
+      return getTranslatedName('last', lang, effectiveSeed);
+    }
+    if (base.includes('full') && base.includes('name') || base === 'name') {
+      return getTranslatedName('full', lang, effectiveSeed);
+    }
+    
+    // City fields with language support
+    if (base.includes('city')) {
+      return getTranslatedCity(lang, effectiveSeed);
+    }
+    
+    // Status fields with language support
+    if (base === 'status' || base.includes('_status') || base.includes('status_')) {
+      return getTranslatedStatus(lang, effectiveSeed);
+    }
+    
+    // Product fields with language support
+    if (base.includes('product') && base.includes('name')) {
+      return getTranslatedProduct(lang, effectiveSeed);
+    }
+    
+    // Department fields with language support
+    if (base.includes('department') || base.includes('dept')) {
+      return getTranslatedDepartment(lang, effectiveSeed);
+    }
+    
+    // Description/Title fields with language support - Use Faker for English
+    if (base.includes('description') || base.includes('desc') || base.includes('title') || 
+        base.includes('comment') || base.includes('note')) {
+      if (effectiveSeed !== undefined) {
+        faker.seed(effectiveSeed);
+      }
+      
+      if (lang === 'ar') {
+        // For Arabic, use the English value if available to create a corresponding translation
+        if (englishValueMap && englishValueMap[baseName]) {
+          return `ترجمة عربية لـ ${englishValueMap[baseName]}`;
+        }
+        return `نص تجريبي ${baseName}`;
+      } else if (lang === 'fr') {
+        return `Texte d'exemple pour ${baseName}`;
+      } else if (lang === 'es') {
+        return `Texto de muestra para ${baseName}`;
+      } else if (lang === 'de') {
+        return `Beispieltext für ${baseName}`;
+      } else if (lang === 'zh') {
+        return `${baseName}的示例文本`;
+      } else if (lang === 'ja') {
+        return `${baseName}のサンプルテキスト`;
+      } else if (lang === 'ru') {
+        return `Пример текста для ${baseName}`;
+      }
+      // Use Faker for English descriptions
+      if (base.includes('title')) {
+        return faker.lorem.words({ min: 2, max: 5 });
+      }
+      return faker.lorem.sentence();
+    }
+  }
+  
+  // Gender field - Use Faker
+  if (n === 'gender' || n === 'sex' || n.includes('_gender') || n.includes('gender_')) {
+    return faker.person.sex();
+  }
+  
+  // Status fields - generic: only Active / Inactive
+  if (n === 'status' || n.includes('_status') || n.includes('status_')) {
+    return faker.helpers.arrayElement(['Active', 'Inactive']);
+  }
+  if (n.includes('order') && n.includes('status')) {
+    return faker.helpers.arrayElement(['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled', 'Refunded']);
+  }
+  if (n.includes('payment') && n.includes('status')) {
+    return faker.helpers.arrayElement(['Pending', 'Paid', 'Failed', 'Refunded', 'Processing']);
+  }
+  
+  // Phone/Mobile fields - Use Faker for realistic phone numbers
+  if (n.includes('phone') || n.includes('mobile') || n.includes('tel')) {
+    // Generate as numeric string without formatting
+    return faker.phone.number().replace(/\D/g, '');
+  }
+  
+  // Occupation/Job fields - Use Faker
+  if (n.includes('occupation') || n.includes('job') && !n.includes('title') || n.includes('profession') || n.includes('career')) {
+    return faker.person.jobTitle();
+  }
+  
+  // Department and role fields - Use Faker
+  if (n.includes('department') || n.includes('dept')) {
+    return faker.commerce.department();
+  }
+  if (n.includes('role') || n.includes('position') || n.includes('title') && n.includes('job')) {
+    return faker.person.jobDescriptor();
+  }
+  
+  // Education fields - Use Faker
+  if (n.includes('education') || n.includes('degree')) {
+    return faker.person.bio();
+  }
+  
+  // Marital status - Use Faker
+  if (n.includes('marital')) {
+    return faker.helpers.arrayElement(['Single', 'Married', 'Divorced', 'Widowed', 'Separated']);
+  }
+  
+  // Name fields - Use Faker for realistic names
+  if (n.includes('dog')) return faker.animal.dog();
+  if (n.includes('first') && n.includes('name')) return faker.person.firstName();
+  if (n.includes('last') && n.includes('name')) return faker.person.lastName();
+  if (n.includes('full') && n.includes('name') || n === 'name' || n === 'username') {
+    return faker.person.fullName();
+  }
+  if (n === 'username' || n.includes('user') && n.includes('name')) {
+    return faker.internet.userName();
+  }
+  
+  // Location fields - Use Faker for realistic locations
+  if (n.includes('city')) return faker.location.city();
+  if (n.includes('country') && n.includes('code')) return faker.location.countryCode();
+  if (n.includes('from') && n.includes('country') || n.includes('origin') && n.includes('country') || 
+      n.includes('birth') && n.includes('country') || n.includes('home') && n.includes('country') ||
+      n.includes('nationality')) {
+    return faker.location.country();
+  }
+  if (n.includes('country')) return faker.location.country();
+  if (n.includes('place') || n.includes('location') && !n.includes('lat') && !n.includes('lon')) {
+    return faker.location.city();
+  }
+  if (n.includes('state') && !n.includes('status')) {
+    return faker.location.state({ abbreviated: true });
+  }
+  if (n.includes('zipcode') || n.includes('zip') || n.includes('postal')) {
+    return faker.location.zipCode();
+  }
+  if (n.includes('street') || n.includes('address') && !n.includes('email')) {
+    return faker.location.streetAddress();
+  }
+  
+  // Network/IP fields - Use Faker
+  if (n.includes('ip') && (n.includes('address') || n === 'ip' || n.includes('ipv4'))) {
+    return faker.internet.ip();
+  }
+  if (n.includes('ipv6')) {
+    return faker.internet.ipv6();
+  }
+  if (n.includes('hostname') || n.includes('host') && n.includes('name')) {
+    return faker.internet.domainName();
+  }
+  if (n.includes('user') && n.includes('agent')) {
+    return faker.internet.userAgent();
+  }
+  
+  // Device/Hardware identifiers - Keep custom for special formats
+  if (n.includes('imei')) {
+    return generateIMEI();
+  }
+  if (n.includes('imsi')) {
+    return generateIMSI();
+  }
+  if (n.includes('mac') && (n.includes('address') || n === 'mac')) {
+    return faker.internet.mac();
+  }
+  if (n.includes('uuid') || n.includes('guid')) {
+    return faker.string.uuid();
+  }
+  if (n.includes('serial') && (n.includes('number') || n.includes('no'))) {
+    return faker.string.alphanumeric({ length: 12, casing: 'upper' });
+  }
+  
+  // Financial identifiers - Use Faker
+  if (n.includes('credit') && n.includes('card') || n.includes('card') && n.includes('number')) {
+    return faker.finance.creditCardNumber();
+  }
+  if (n.includes('bank') && n.includes('account')) {
+    return faker.finance.accountNumber();
+  }
+  if (n.includes('iban')) {
+    return faker.finance.iban();
+  }
+  if (n.includes('swift') || n.includes('bic')) {
+    return faker.finance.bic();
+  }
+  if (n.includes('routing') && n.includes('number')) {
+    return faker.finance.routingNumber();
+  }
+  if (n.includes('pin') || n.includes('cvv') || n.includes('cvc')) {
+    return faker.finance.pin();
+  }
+
+  // Generic digit-only fields (IDs, codes, numeric values stored as strings)
+  // If the field name clearly suggests an identifier / code / value, prefer numeric strings.
+  const looksNumericString =
+    (n.includes('id') || n.includes('uid') || n.includes('eid')) ||
+    (n.includes('number') || n.endsWith('_no') || n.includes('no_')) ||
+    n.includes('code') ||
+    n.endsWith('_value') || n.includes('value_') ||
+    n.includes('age') ||
+    (n.includes('phone') || n.includes('mobile') || n.includes('tel'));
+
+  if (looksNumericString) {
+    // Keep more specific patterns above (IMEI, IMSI, SSN, credit cards, etc.)
+    // Here we just return a simple numeric string with a reasonable length.
+    const length =
+      n.includes('age') ? 2 :
+      n.includes('phone') || n.includes('mobile') || n.includes('tel') ? 10 :
+      n.includes('uid') || n.includes('eid') ? 12 :
+      8;
+    return faker.string.numeric({ length, allowLeadingZeros: true });
+  }
+  
+  // Contact fields - Use Faker
+  if (n.includes('email') || n.includes('mail') && !n.includes('male')) {
+    return faker.internet.email();
+  }
+  if (n.includes('url') || n.includes('website') || n.includes('link')) {
+    return faker.internet.url();
+  }
+  if (n.includes('domain')) {
+    return faker.internet.domainName();
+  }
+  
+  // Media fields - Use Faker
+  if (n.includes('image') || n.includes('photo') || n.includes('avatar') || n.includes('picture')) {
+    return faker.image.url();
+  }
+  if (n.includes('video')) return faker.image.url({ width: 1920, height: 1080 });
+  if (n.includes('file') || n.includes('document')) {
+    return faker.system.fileName({ extensionCount: 1 });
+  }
+  
+  // Color fields - Use Faker
+  if (n.includes('color') || n.includes('colour')) {
+    return faker.color.human();
+  }
+  
+  // Size fields - Use Faker
+  if (n.includes('size') && !n.includes('page') && !n.includes('file')) {
+    return faker.helpers.arrayElement(['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']);
+  }
+  
+  // Category/Type fields - Use Faker
+  if (n.includes('category') || n.includes('type') && !n.includes('vessel') && !n.includes('vehicle')) {
+    return faker.commerce.productAdjective();
+  }
+  
+  // Product fields - Use Faker
+  if (n.includes('product') && n.includes('name')) {
+    return faker.commerce.productName();
+  }
+  if (n.includes('sku') || n.includes('product') && n.includes('code')) {
+    return faker.string.alphanumeric({ length: 10, casing: 'upper' });
+  }
+  if (n.includes('product') && n.includes('description')) {
+    return faker.commerce.productDescription();
+  }
+  
+  // Airport/Aviation
   if (n.includes('iata')) return IATA_CODES[randInt(0, IATA_CODES.length - 1)];
   if (n.includes('icao')) return ICAO_CODES[randInt(0, ICAO_CODES.length - 1)];
   if (n.includes('airport')) return IATA_CODES[randInt(0, IATA_CODES.length - 1)];
+  
   // Vessel/Maritime specific
   if (n.includes('vessel') && n.includes('name')) return VESSEL_NAMES[randInt(0, VESSEL_NAMES.length - 1)];
   if (n.includes('ship') && n.includes('name')) return VESSEL_NAMES[randInt(0, VESSEL_NAMES.length - 1)];
@@ -317,18 +1220,72 @@ function smartStringForField(key: string): string | null {
   if (n.includes('ship') && n.includes('type')) return VESSEL_TYPES[randInt(0, VESSEL_TYPES.length - 1)];
   if (n.includes('imo')) return IMO_NUMBERS[randInt(0, IMO_NUMBERS.length - 1)];
   if (n.includes('port') && n.includes('name')) return SEAPORTS[randInt(0, SEAPORTS.length - 1)].name;
+  
   // Vehicle specific
   if (n.includes('license') || n.includes('plate')) return generateLicensePlate();
   if (n.includes('vehicle') && n.includes('type')) return VEHICLE_TYPES[randInt(0, VEHICLE_TYPES.length - 1)];
-  if (n.includes('make')) return VEHICLE_MAKES[randInt(0, VEHICLE_MAKES.length - 1)];
-  if (n.includes('vin')) return `${randInt(10, 99)}${String.fromCharCode(65 + randInt(0, 25))}${String.fromCharCode(65 + randInt(0, 25))}${randInt(100000, 999999)}${randInt(10000, 99999)}`;
-  if (n.includes('driver')) return `${FIRST_NAMES[randInt(0, FIRST_NAMES.length - 1)]} ${LAST_NAMES[randInt(0, LAST_NAMES.length - 1)]}`;
-  if (n.includes('delivery') && n.includes('id')) return `DEL-${randInt(100000, 999999)}`;
-  if (n.includes('route') && n.includes('id')) return `RT-${randInt(1000, 9999)}`;
+  if (n.includes('make') && !n.includes('email')) return VEHICLE_MAKES[randInt(0, VEHICLE_MAKES.length - 1)];
+  if (n.includes('vin')) return generateVIN();
+  if (n.includes('driver')) return generateDriverName();
+  if (n.includes('delivery') && n.includes('id')) return generateDeliveryId();
+  if (n.includes('route') && n.includes('id')) return generateRouteId();
   if (n.includes('warehouse')) {
     const warehouses = VEHICLE_LOCATIONS.filter(v => v.type === 'warehouse');
     return warehouses[randInt(0, warehouses.length - 1)].name;
   }
+  
+  // Description fields - Use Faker
+  if (n.includes('description') || n.includes('desc') || n.includes('comment') || n.includes('note')) {
+    return faker.lorem.sentence();
+  }
+  if (n.includes('title') && !n.includes('job')) {
+    return faker.lorem.words({ min: 2, max: 5 });
+  }
+  if (n.includes('text') || n.includes('content')) {
+    return faker.lorem.paragraph();
+  }
+  if (n.includes('bio') || n.includes('biography')) {
+    return faker.person.bio();
+  }
+  
+  // Company/Business fields - Use Faker
+  if (n.includes('company') && n.includes('name')) {
+    return faker.company.name();
+  }
+  if (n.includes('company') && n.includes('suffix')) {
+    return faker.company.buzzNoun();
+  }
+  if (n.includes('business') && n.includes('name')) {
+    return faker.company.name();
+  }
+  
+  // Vehicle fields - Keep custom for specific formats
+  if (n.includes('license') || n.includes('plate')) {
+    return generateLicensePlate();
+  }
+  if (n.includes('vehicle') && n.includes('type')) {
+    return VEHICLE_TYPES[randInt(0, VEHICLE_TYPES.length - 1)];
+  }
+  if (n.includes('make') && !n.includes('email')) {
+    return VEHICLE_MAKES[randInt(0, VEHICLE_MAKES.length - 1)];
+  }
+  if (n.includes('vin')) {
+    return generateVIN();
+  }
+  if (n.includes('driver')) {
+    return generateDriverName();
+  }
+  if (n.includes('delivery') && n.includes('id')) {
+    return generateDeliveryId();
+  }
+  if (n.includes('route') && n.includes('id')) {
+    return generateRouteId();
+  }
+  if (n.includes('warehouse')) {
+    const warehouses = VEHICLE_LOCATIONS.filter(v => v.type === 'warehouse');
+    return warehouses[randInt(0, warehouses.length - 1)].name;
+  }
+  
   return null;
 }
 
@@ -494,13 +1451,59 @@ export function getDateFormatForField(mapping: Mapping, fieldPath: string, rule?
 }
 
 export function generateDoc(mapping: Mapping, range?: TimeRange, rules?: FieldRules): GeneratedDoc {
+  // Language context map: baseName -> seed value
+  const languageSeedMap: Record<string, number> = {};
+  // Store English values for Arabic translation
+  const englishValueMap: Record<string, string> = {};
+  
   function genProps(props: Properties, basePath = ''): Record<string, unknown> {
     const out: Record<string, unknown> = {};
+    
+    // First pass: identify all language field pairs and assign seeds
+    for (const [key] of Object.entries(props)) {
+      const langInfo = detectLanguageField(key);
+      if (langInfo && !languageSeedMap[langInfo.baseName]) {
+        // Assign a consistent seed for this base field name
+        languageSeedMap[langInfo.baseName] = randInt(0, 7);
+      }
+    }
+    
+    // Second pass: Generate all _en fields first and store their values
+    for (const [key, spec] of Object.entries(props)) {
+      const langInfo = detectLanguageField(key);
+      if (langInfo && langInfo.lang === 'en') {
+        const t = spec.type ?? (spec.properties ? 'object' : 'keyword');
+        const path = basePath ? `${basePath}.${key}` : key;
+        const rule = (rules?.[path] ?? rules?.[key]);
+        
+        if (rule?.kind !== 'manual' && (t === 'keyword' || t === 'text')) {
+          const languageContext = {
+            baseName: langInfo.baseName,
+            lang: 'en',
+            seed: languageSeedMap[langInfo.baseName]
+          };
+          const guessed = smartStringForField(key, languageContext);
+          if (guessed) {
+            englishValueMap[langInfo.baseName] = guessed;
+          }
+        }
+      }
+    }
+    
     for (const [key, spec] of Object.entries(props)) {
       const t = spec.type ?? (spec.properties ? 'object' : 'keyword');
       const path = basePath ? `${basePath}.${key}` : key;
       const rule = (rules?.[path] ?? rules?.[key]);
       if (rule?.kind === 'manual') { out[key] = rule.value; continue; }
+      
+      // Check if this is a language-specific field
+      const langInfo = detectLanguageField(key);
+      const languageContext = langInfo ? {
+        baseName: langInfo.baseName,
+        lang: langInfo.lang,
+        seed: languageSeedMap[langInfo.baseName]
+      } : undefined;
+      
       switch (t) {
         case 'keyword':
         case 'text':
@@ -525,7 +1528,7 @@ export function generateDoc(mapping: Mapping, range?: TimeRange, rules?: FieldRu
               out[key] = `${base}/${randString(12)}.${ext}`;
             }
           } else {
-            const guessed = smartStringForField(key);
+            const guessed = smartStringForField(key, languageContext, englishValueMap);
             out[key] = guessed ?? randString(10);
           }
           break;
@@ -549,7 +1552,9 @@ export function generateDoc(mapping: Mapping, range?: TimeRange, rules?: FieldRu
             const min = rule.min ?? 0;
             out[key] = randFloat(min, rule.max);
           } else {
-            out[key] = randFloat(0, 1000);
+            // Try smart number generation based on field name
+            const smartNum = smartNumberForField(key, false);
+            out[key] = smartNum !== null ? smartNum : randFloat(0, 1000);
           }
           break;
         case 'integer':
@@ -568,11 +1573,23 @@ export function generateDoc(mapping: Mapping, range?: TimeRange, rules?: FieldRu
             const maxI = Math.floor(rule.max);
             out[key] = randInt(minI, maxI);
           } else {
-            out[key] = randInt(0, 1000);
+            // Try smart number generation based on field name
+            const smartNum = smartNumberForField(key, true);
+            out[key] = smartNum !== null ? smartNum : randInt(0, 1000);
           }
           break;
         case 'boolean':
-          out[key] = Math.random() < 0.5;
+          // Smart boolean generation based on field name
+          const n = key.toLowerCase();
+          if (n.includes('active') || n.includes('enabled') || n.includes('verified') || 
+              n.includes('confirmed') || n.includes('approved')) {
+            out[key] = Math.random() < 0.7; // 70% true for active/enabled fields
+          } else if (n.includes('deleted') || n.includes('blocked') || n.includes('banned') || 
+                     n.includes('suspended') || n.includes('archived')) {
+            out[key] = Math.random() < 0.2; // 20% true for negative fields
+          } else {
+            out[key] = Math.random() < 0.5; // 50/50 for generic boolean fields
+          }
           break;
         case 'geo_point':
           if (rule?.kind === 'geo_point') {

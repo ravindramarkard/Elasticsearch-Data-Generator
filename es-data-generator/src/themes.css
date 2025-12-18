@@ -1,0 +1,134 @@
+/* Theme System - Dark and Light Themes */
+
+/* Dark Theme (Default) */
+:root[data-theme="dark"],
+:root:not([data-theme]) {
+  --bg-primary: #0f1115;
+  --bg-secondary: #0f141d;
+  --bg-tertiary: #1a1f29;
+  --bg-hover: #243042;
+  --bg-active: #0d1220;
+  --bg-tab-active: #e7e9ee;
+  --border-color: #334155;
+  --text-primary: #e7e9ee;
+  --text-secondary: #cbd5e1;
+  --text-tertiary: #9aa4b2;
+  --text-tab-active: #0f1115;
+  --accent-color: #3b82f6;
+  --accent-hover: #2563eb;
+  --json-key: #8aa1ff;
+  --json-value: #d1d5db;
+  --success: #28a745;
+  --error: #dc3545;
+  --warning: #ffc107;
+  --info: #17a2b8;
+}
+
+/* Light Theme */
+:root[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f8f9fa;
+  --bg-tertiary: #e9ecef;
+  --bg-hover: #dee2e6;
+  --bg-active: #f1f3f5;
+  --bg-tab-active: #007bff;
+  --border-color: #ced4da;
+  --text-primary: #212529;
+  --text-secondary: #495057;
+  --text-tertiary: #6c757d;
+  --text-tab-active: #ffffff;
+  --accent-color: #007bff;
+  --accent-hover: #0056b3;
+  --json-key: #0066cc;
+  --json-value: #333333;
+  --success: #28a745;
+  --error: #dc3545;
+  --warning: #ffc107;
+  --info: #17a2b8;
+}
+
+/* Apply theme variables to elements */
+html, body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+section {
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
+}
+
+label {
+  color: var(--text-secondary);
+}
+
+input, select, button, textarea {
+  border-color: var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+input:focus, select:focus, button:focus, textarea:focus {
+  outline-color: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+button:hover {
+  background: var(--bg-hover);
+}
+
+.result {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+.table-wrap {
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
+}
+
+thead th {
+  background: var(--bg-tertiary);
+}
+
+tbody tr:nth-child(odd) {
+  background: var(--bg-active);
+}
+
+.tabs {
+  border-color: var(--border-color);
+  background: var(--bg-active);
+}
+
+.tab {
+  color: var(--text-tertiary);
+}
+
+.tab.active {
+  background: var(--bg-tab-active);
+  color: var(--text-tab-active);
+}
+
+.tab:hover {
+  color: var(--text-secondary);
+}
+
+.json-leaf .json-key {
+  color: var(--json-key);
+}
+
+.json-leaf .json-value {
+  color: var(--json-value);
+}
+
+.container textarea {
+  border-color: var(--border-color);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.note {
+  color: var(--text-tertiary);
+}
+

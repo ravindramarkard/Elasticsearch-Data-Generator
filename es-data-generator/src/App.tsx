@@ -1,12 +1,13 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import './App.css';
+import './themes.css';
 import * as XLSX from 'xlsx';
 import type { Connection, AuthType } from './esClient';
 import { pingHealth, fetchMapping, bulkInsert, translateSql, executeSql, nextSqlPage, closeSqlCursor, listIndices, listDataStreams, searchPreview, deleteByQueryAsync, updateByQueryAsync, updateById, cancelTask, getIndexCount } from './esClient';
 import { loadConnections, saveConnections, loadGeneratorConfigs, saveGeneratorConfig, deleteGeneratorConfig, loadLastGenerator, saveLastGenerator, loadAuditLogs, saveAuditLogs, clearAuditLogs, deleteOldAuditLogs } from './storage';
 import type { GeneratorConfig, AuditEntry } from './storage';
 import { extractMappingFromResponse, extractAnyMapping, generateDocs, diffMappings, listFieldsByType, flattenMappingFields, getDateFormatForField, formatDate, calculateNextPosition, CITIES, SEAPORTS, VEHICLE_LOCATIONS } from './generator';
-import type { Mapping, FieldRules, FieldRule, Granularity, Distribution, DateRule, TypeChange, GeoPathRule } from './generator';
+import type { Mapping, FieldRules, FieldRule, Granularity, Distribution, DateRule, TypeChange, GeoPathRule, PhoneRule } from './generator';
 
 const DEFAULT_START_ISO = new Date(Date.now() - 86400000).toISOString();
 const DEFAULT_END_ISO = new Date().toISOString();
@@ -69,7 +70,7 @@ function SearchableSelect({
   placeholder?: string;
   label?: string;
 }) {
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState(value || '');
   const [showDropdown, setShowDropdown] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
 
@@ -79,9 +80,13 @@ function SearchableSelect({
     return options.filter(opt => opt.toLowerCase().includes(term));
   }, [options, searchTerm]);
 
+  // Track the previous value to detect external changes
+  const prevValueRef = useRef<string>(value);
   useEffect(() => {
-    if (value && !searchTerm) {
+    // Only update searchTerm if value changed externally (not from user typing)
+    if (value !== undefined && value !== prevValueRef.current) {
       setSearchTerm(value);
+      prevValueRef.current = value;
     }
   }, [value]);
 
@@ -201,6 +206,19 @@ function SearchableSelect({
 }
 
 function App() {
+  // Theme management - Dark/Light toggle
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const saved = localStorage.getItem('es-data-generator-theme');
+    if (saved === 'light') return false;
+    return true; // Default to dark
+  });
+
+  useEffect(() => {
+    const theme = isDarkMode ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('es-data-generator-theme', theme);
+  }, [isDarkMode]);
+
   const [connections, setConnections] = useState<Connection[]>(() => loadConnections());
   const [selectedId, setSelectedId] = useState<string>(() => connections[0]?.id || '');
   const selected = useMemo(() => connections.find(c => c.id === selectedId), [connections, selectedId]);
@@ -590,11 +608,74 @@ function App() {
         }
         
         totalRows += result.rows.length;
-        
-        // Clean data
-        const transformedData = result.rows.map((doc) => {
+
+        // Make a mutable copy so we can apply the same transformations as single-file import
+        const fileHeaders = [...result.headers];
+        const fileRows = result.rows.map(row => ({ ...row }));
+
+        // 1) Auto-combine LAT/LON into a geo_point field (same logic as single-file import)
+        const hasLatColumn = fileHeaders.some(h => h.toLowerCase() === 'lat' || h.toLowerCase() === 'latitude');
+        const hasLonColumn = fileHeaders.some(h => h.toLowerCase() === 'lon' || h.toLowerCase() === 'longitude' || h.toLowerCase() === 'long');
+
+        if (hasLatColumn && hasLonColumn) {
+          const latField = fileHeaders.find(h => h.toLowerCase() === 'lat' || h.toLowerCase() === 'latitude') || 'LAT';
+          const lonField = fileHeaders.find(h => h.toLowerCase() === 'lon' || h.toLowerCase() === 'longitude' || h.toLowerCase() === 'long') || 'LON';
+
+          // Try to detect geo field name from mapping
+          let geoField = 'location'; // Default
+          try {
+            const mappingRes = await fetchMapping(selected, importIndex);
+            if (mappingRes.ok && mappingRes.json) {
+              const json = mappingRes.json as Record<string, any>;
+              const indexMappings = json[importIndex]?.mappings || json.mappings || {};
+              if (indexMappings.properties) {
+                const geoFields = Object.entries(indexMappings.properties).filter(([_, spec]: any) => (spec as any).type === 'geo_point');
+                if (geoFields.length > 0) {
+                  geoField = geoFields[0][0];
+                }
+              }
+            }
+          } catch (e) {
+            console.log('Could not detect geo field for batch import, using default "location"');
+          }
+
+          let combinedCount = 0;
+          let skippedCount = 0;
+
+          fileRows.forEach((doc, idx) => {
+            const lat = (doc as any)[latField];
+            const lon = (doc as any)[lonField];
+
+            const latNum = typeof lat === 'string' ? parseFloat(lat) : (typeof lat === 'number' ? lat : NaN);
+            const lonNum = typeof lon === 'string' ? parseFloat(lon) : (typeof lon === 'number' ? lon : NaN);
+
+            if (!isNaN(latNum) && !isNaN(lonNum) && latNum !== 0 && lonNum !== 0) {
+              (doc as any)[geoField] = { lat: latNum, lon: lonNum };
+              combinedCount++;
+              delete (doc as any)[latField];
+              delete (doc as any)[lonField];
+            } else {
+              skippedCount++;
+              console.warn(`[Batch] Row ${idx + 1} (${file.name}): Invalid LAT/LON - LAT: ${lat}, LON: ${lon}`);
+              // Remove invalid LAT/LON fields to avoid ES errors
+              delete (doc as any)[latField];
+              delete (doc as any)[lonField];
+            }
+          });
+
+          console.log('[Batch] Geo-point combination summary:', {
+            file: file.name,
+            total: fileRows.length,
+            combined: combinedCount,
+            skipped: skippedCount,
+            geoField
+          });
+        }
+
+        // 2) Clean data: remove empty/null/whitespace-only values (same as single-file import)
+        const transformedData = fileRows.map((doc) => {
           const cleaned: Record<string, any> = {};
-          
+
           for (const [key, value] of Object.entries(doc)) {
             if (value === '' || value === null || value === undefined) {
               continue;
@@ -604,7 +685,7 @@ function App() {
             }
             cleaned[key] = value;
           }
-          
+
           return cleaned;
         });
         
@@ -788,8 +869,18 @@ function App() {
       if (lastConfig.rules) setRules(lastConfig.rules);
       if (lastConfig.indexName) setIndexName(lastConfig.indexName);
       if (lastConfig.docCount) setGenCount(lastConfig.docCount);
-      if (lastConfig.startDate) setStartDate(lastConfig.startDate);
-      if (lastConfig.endDate) setEndDate(lastConfig.endDate);
+      if (lastConfig.chunkSize) setChunkSize(lastConfig.chunkSize);
+      if (lastConfig.startDate) {
+        setStartDate(lastConfig.startDate);
+        setRangeStart(lastConfig.startDate);
+      }
+      if (lastConfig.endDate) {
+        setEndDate(lastConfig.endDate);
+        setRangeEnd(lastConfig.endDate);
+      }
+      if (lastConfig.granularity) setGranularity(lastConfig.granularity as Granularity);
+      if (lastConfig.distribution) setDistribution(lastConfig.distribution as Distribution);
+      if (lastConfig.rate !== undefined) setRate(lastConfig.rate);
     }
   }, []);
 
@@ -808,6 +899,7 @@ function App() {
         rules,
         indexName,
         docCount: genCount,
+        chunkSize,
         startDate,
         endDate,
         granularity,
@@ -815,7 +907,7 @@ function App() {
         rate
       });
     }
-  }, [mappingLoaded, rules, indexName, genCount, startDate, endDate, granularity, distribution, rate]);
+  }, [mappingLoaded, rules, indexName, genCount, chunkSize, startDate, endDate, granularity, distribution, rate]);
 
   function update<K extends keyof Connection>(key: K, value: Connection[K]) {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -873,7 +965,68 @@ function App() {
 
   return (
     <div className="container">
-      <h1>Elasticsearch Data Generator</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap', gap: '1rem' }}>
+        <h1 style={{ margin: 0 }}>Elasticsearch Data Generator</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <span style={{ fontSize: '0.95rem', color: 'var(--text-secondary)', fontWeight: 500 }}>Theme</span>
+          <label
+            style={{
+              position: 'relative',
+              display: 'inline-block',
+              width: '64px',
+              height: '32px',
+              cursor: 'pointer'
+            }}
+            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            <input
+              type="checkbox"
+              checked={!isDarkMode}
+              onChange={() => setIsDarkMode(!isDarkMode)}
+              style={{
+                opacity: 0,
+                width: 0,
+                height: 0,
+                position: 'absolute'
+              }}
+            />
+            <span
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                backgroundColor: isDarkMode ? '#334155' : '#3b82f6',
+                borderRadius: '16px',
+                transition: 'background-color 0.3s ease',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '2px'
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  height: '28px',
+                  width: '28px',
+                  left: isDarkMode ? '2px' : '34px',
+                  backgroundColor: '#ffffff',
+                  borderRadius: '50%',
+                  transition: 'left 0.3s ease',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '16px',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                }}
+              >
+                {isDarkMode ? '🌙' : '☀️'}
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
       <div className="tabs">
         <button className={activeTab === 'connections' ? 'tab active' : 'tab'} onClick={() => setActiveTab('connections')}><span className="tab-icon">🔗</span><span>Connections</span></button>
         <button className={activeTab === 'schema' ? 'tab active' : 'tab'} onClick={() => setActiveTab('schema')}><span className="tab-icon">📐</span><span>Schema Generator</span></button>
@@ -888,23 +1041,195 @@ function App() {
       {activeTab === 'connections' && (
       <section>
         <div className="section-header">
-          <h2>Connections</h2>
+          <h2>🔗 Manage Elasticsearch Connections</h2>
+          <p style={{ fontSize: '0.9em', color: '#666', marginTop: '0.5em' }}>
+            Add and manage multiple Elasticsearch connections. All connections are saved automatically in your browser.
+          </p>
+        </div>
+
+        {/* Saved Connections List */}
+        {connections.length > 0 && (
+          <div style={{ marginBottom: '2em' }}>
+            <div className="section-header">
+              <h3>📋 Saved Connections ({connections.length})</h3>
+            </div>
+            
+            <div style={{ background: '#f8f9fa', padding: '1em', borderRadius: '4px', marginBottom: '1em' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ borderBottom: '2px solid #dee2e6' }}>
+                    <th style={{ padding: '0.5em', textAlign: 'center', verticalAlign: 'middle' }}>Active</th>
+                    <th style={{ padding: '0.5em', textAlign: 'left', verticalAlign: 'middle' }}>Name</th>
+                    <th style={{ padding: '0.5em', textAlign: 'left', verticalAlign: 'middle' }}>URL</th>
+                    <th style={{ padding: '0.5em', textAlign: 'left', verticalAlign: 'middle' }}>Auth Type</th>
+                    <th style={{ padding: '0.5em', textAlign: 'center', verticalAlign: 'middle' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {connections.map((conn) => (
+                    <tr key={conn.id} style={{ 
+                      borderBottom: '1px solid #e9ecef',
+                      background: selectedId === conn.id ? '#e3f2fd' : 'transparent'
+                    }}>
+                      <td style={{ padding: '0.5em', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <input 
+                          type="radio" 
+                          name="activeConnection" 
+                          checked={selectedId === conn.id}
+                          onChange={() => setSelectedId(conn.id)}
+                          style={{ cursor: 'pointer', margin: 0 }}
+                        />
+                      </td>
+                      <td style={{ padding: '0.5em', fontWeight: selectedId === conn.id ? 'bold' : 'normal', verticalAlign: 'middle' }}>
+                        {conn.name}
+                        {selectedId === conn.id && <span style={{ marginLeft: '0.5em', color: '#28a745' }}>✓</span>}
+                      </td>
+                      <td style={{ padding: '0.5em', fontSize: '0.9em', color: '#666', verticalAlign: 'middle' }}>{conn.url}</td>
+                      <td style={{ padding: '0.5em', fontSize: '0.9em', verticalAlign: 'middle' }}>
+                        <span style={{ 
+                          padding: '0.2em 0.5em', 
+                          background: conn.authType === 'basic' ? '#e3f2fd' : '#fff3cd',
+                          borderRadius: '3px',
+                          fontSize: '0.85em',
+                          display: 'inline-block'
+                        }}>
+                          {conn.authType === 'basic' ? 'Basic Auth' : 'API Key'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '0.5em', textAlign: 'center', verticalAlign: 'middle' }}>
+                        <div style={{ display: 'flex', gap: '0.5em', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <button 
+                            onClick={() => setSelectedId(conn.id)}
+                            style={{ 
+                              padding: '0.4em 1em', 
+                              background: '#007bff',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              fontSize: '0.85em',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              minWidth: '70px'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.background = '#0056b3'}
+                            onMouseOut={(e) => e.currentTarget.style.background = '#007bff'}
+                          >
+                            Select
+                          </button>
+                          <button 
+                            onClick={() => {
+                              if (confirm(`Delete connection "${conn.name}"?`)) {
+                                const next = connections.filter(c => c.id !== conn.id);
+                                setConnections(next);
+                                saveConnections(next);
+                                if (selectedId === conn.id) {
+                                  setSelectedId(next[0]?.id || '');
+                                }
+                              }
+                            }}
+                            style={{ 
+                              padding: '0.4em 1em', 
+                              background: '#dc3545',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '4px',
+                              fontSize: '0.85em',
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                              minWidth: '70px'
+                            }}
+                            onMouseOver={(e) => e.currentTarget.style.background = '#c82333'}
+                            onMouseOut={(e) => e.currentTarget.style.background = '#dc3545'}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Export/Import Connections */}
+            <div className="row" style={{ marginBottom: '1em' }}>
+              <button 
+                onClick={() => {
+                  const dataStr = JSON.stringify(connections, null, 2);
+                  const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                  const url = URL.createObjectURL(dataBlob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = `es-connections-${Date.now()}.json`;
+                  link.click();
+                  URL.revokeObjectURL(url);
+                  logAudit('Export Connections', 'system', `Exported ${connections.length} connections`, 'success', { count: connections.length });
+                }}
+                style={{ background: '#28a745' }}
+              >
+                📥 Export All Connections
+              </button>
+              <button 
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.json';
+                  input.onchange = async (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (!file) return;
+                    try {
+                      const text = await file.text();
+                      const imported = JSON.parse(text) as Connection[];
+                      if (!Array.isArray(imported)) {
+                        alert('Invalid file format');
+                        return;
+                      }
+                      // Merge with existing, avoiding duplicates by URL
+                      const merged = [...connections];
+                      let addedCount = 0;
+                      for (const conn of imported) {
+                        if (!merged.some(c => c.url === conn.url && c.name === conn.name)) {
+                          merged.push({ ...conn, id: crypto.randomUUID() });
+                          addedCount++;
+                        }
+                      }
+                      setConnections(merged);
+                      saveConnections(merged);
+                      alert(`Imported ${addedCount} new connections`);
+                      logAudit('Import Connections', 'system', `Imported ${addedCount} connections`, 'success', { count: addedCount });
+                    } catch (e) {
+                      alert('Failed to import: ' + (e instanceof Error ? e.message : 'Unknown error'));
+                    }
+                  };
+                  input.click();
+                }}
+                style={{ background: '#17a2b8' }}
+              >
+                📤 Import Connections
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Add New Connection Form */}
+        <div className="section-header">
+          <h3>➕ Add New Connection</h3>
         </div>
         <div className="row">
           <div className="col">
-            <label>Name</label>
-            <input value={form.name} onChange={e => update('name', e.target.value)} />
+            <label>Connection Name</label>
+            <input value={form.name} onChange={e => update('name', e.target.value)} placeholder="My Production ES" />
           </div>
           <div className="col">
-            <label>URL</label>
-            <input value={form.url} onChange={e => update('url', e.target.value)} placeholder="http://localhost:9200" />
+            <label>Elasticsearch URL</label>
+            <input value={form.url} onChange={e => update('url', e.target.value)} placeholder="https://elasticsearch.example.com:9200" />
           </div>
         </div>
         <div className="row">
           <div className="col">
-            <label>Auth Type</label>
+            <label>Authentication Type</label>
             <select value={form.authType} onChange={e => update('authType', e.target.value as AuthType)}>
-              <option value="basic">Basic</option>
+              <option value="basic">Basic Authentication (Username/Password)</option>
               <option value="apiKey">API Key</option>
             </select>
           </div>
@@ -912,58 +1237,74 @@ function App() {
             <>
               <div className="col">
                 <label>Username</label>
-                <input value={form.username} onChange={e => update('username', e.target.value)} />
+                <input value={form.username} onChange={e => update('username', e.target.value)} placeholder="elastic" />
               </div>
               <div className="col">
                 <label>Password</label>
-                <input type="password" value={form.password} onChange={e => update('password', e.target.value)} />
+                <input type="password" value={form.password} onChange={e => update('password', e.target.value)} placeholder="••••••••" />
               </div>
             </>
           ) : (
             <div className="col">
               <label>API Key</label>
-              <input value={form.apiKey} onChange={e => update('apiKey', e.target.value)} placeholder="base64Key" />
+              <input value={form.apiKey} onChange={e => update('apiKey', e.target.value)} placeholder="base64EncodedApiKey" />
             </div>
           )}
         </div>
         <div className="row">
-          <button onClick={addConnection}>Save Connection</button>
-          <button onClick={addLocalConnection}>Add Local ES</button>
+          <button onClick={addConnection} style={{ background: '#28a745' }}>
+            💾 Save Connection
+          </button>
+          <button onClick={addLocalConnection} style={{ background: '#6c757d' }}>
+            🏠 Add Localhost (http://localhost:9200)
+          </button>
         </div>
 
+        {/* Test Connection Section */}
+        {selected && (
+          <div style={{ marginTop: '2em' }}>
         <div className="section-header">
-          <h2>Saved</h2>
+              <h3>🔧 Test Active Connection</h3>
+              <p style={{ fontSize: '0.9em', color: '#666', marginTop: '0.5em' }}>
+                Currently testing: <strong>{selected.name}</strong> ({selected.url})
+              </p>
         </div>
-        {connections.length === 0 ? (
-          <p>No saved connections.</p>
-        ) : (
-          <div className="saved">
-            <select value={selectedId} onChange={e => setSelectedId(e.target.value)}>
-              {connections.map(c => (
-                <option key={c.id} value={c.id}>{c.name} — {c.url}</option>
-              ))}
-            </select>
-            {selected && (
+            
+            {/* Quick Edit */}
               <div className="row">
                 <div className="col">
-                  <label>URL</label>
+                <label>Edit URL</label>
                   <input value={selected.url} onChange={e => updateSelected('url', e.target.value)} />
                 </div>
                 <div className="col">
-                  <label>Auth</label>
+                <label>Edit Auth Type</label>
                   <select value={selected.authType} onChange={e => updateSelected('authType', e.target.value as AuthType)}>
-                    <option value="basic">Basic</option>
+                  <option value="basic">Basic Auth</option>
                     <option value="apiKey">API Key</option>
                   </select>
                 </div>
               </div>
-            )}
+
             <div className="row">
-              <button onClick={testSelected} disabled={!selected || testing}>Test Connection</button>
-              <button onClick={removeSelected} disabled={!selected}>Delete</button>
+              <button onClick={testSelected} disabled={!selected || testing}>
+                {testing ? '⏳ Testing...' : '🔌 Test Connection'}
+              </button>
+              <button onClick={removeSelected} disabled={!selected} style={{ background: '#dc3545' }}>
+                🗑️ Delete Connection
+              </button>
             </div>
-            <pre className="result">{testing ? 'Testing…' : result}</pre>
-            <p className="note">Note: Browsers enforce TLS. Self-signed certificates must be trusted by the OS; uploading CA certs is not supported in browser fetch.</p>
+            <pre className="result">{testing ? 'Testing connection to Elasticsearch...' : result}</pre>
+            <p className="note">
+              ℹ️ <strong>Note:</strong> Browsers enforce TLS. Self-signed certificates must be trusted by your operating system. 
+              Uploading CA certificates is not supported in browser-based applications.
+            </p>
+          </div>
+        )}
+
+        {connections.length === 0 && (
+          <div style={{ padding: '2em', textAlign: 'center', background: '#f8f9fa', borderRadius: '4px', marginTop: '2em' }}>
+            <h3 style={{ color: '#666' }}>No connections saved yet</h3>
+            <p style={{ color: '#999' }}>Add your first Elasticsearch connection above to get started!</p>
           </div>
         )}
       </section>
@@ -989,15 +1330,47 @@ function App() {
                   if (configId) {
                     const config = savedConfigs.find(c => c.id === configId);
                     if (config) {
+                      // Load all saved configuration fields
+                      setConfigName(config.name); // Set the configuration name
                       setMappingLoaded(config.mapping);
                       setMappingJson(JSON.stringify(config.mapping, null, 2));
-                      setRules(config.rules);
-                      setIndexName(config.indexName);
-                      setGenCount(config.docCount);
-                      if (config.startDate) setStartDate(config.startDate);
-                      if (config.endDate) setEndDate(config.endDate);
-                      setGenStatus(`Loaded configuration: ${config.name}`);
+                      setRules(config.rules || {});
+                      // Always set index name, even if empty
+                      setIndexName(config.indexName || '');
+                      setGenCount(config.docCount || 1000);
+                      if (config.chunkSize) setChunkSize(config.chunkSize);
+                      if (config.startDate) {
+                        setStartDate(config.startDate);
+                        setRangeStart(config.startDate);
+                      }
+                      if (config.endDate) {
+                        setEndDate(config.endDate);
+                        setRangeEnd(config.endDate);
+                      }
+                      if (config.granularity) setGranularity(config.granularity as Granularity);
+                      if (config.distribution) setDistribution(config.distribution as Distribution);
+                      if (config.rate !== undefined) setRate(config.rate);
+                      setGenStatus(`✅ Loaded configuration: ${config.name} - All settings restored including index: ${config.indexName || '(none)'}`);
                     }
+                  } else {
+                    // Clear all fields when "Select a saved configuration..." is selected
+                    // Reset all configuration fields to default values
+                    setConfigName(''); // Clear configuration name
+                    setMappingLoaded(null);
+                    setMappingJson('');
+                    setRules({});
+                    setIndexName('');
+                    setGenCount(1000);
+                    setChunkSize(1000);
+                    setStartDate(DEFAULT_START_ISO);
+                    setEndDate(DEFAULT_END_ISO);
+                    setRangeStart('');
+                    setRangeEnd('');
+                    setRangePreset('last-7d'); // Reset to default preset
+                    setGranularity('hour');
+                    setDistribution('uniform');
+                    setRate(10);
+                    setGenStatus('All fields reset. Start fresh configuration.');
                   }
                 }}
               >
@@ -1030,6 +1403,7 @@ function App() {
                   rules,
                   indexName,
                   docCount: genCount,
+                  chunkSize,
                   startDate,
                   endDate,
                   granularity,
@@ -1069,6 +1443,16 @@ function App() {
                 setMappingLoaded(null);
                 setMappingJson('');
                 setRules({});
+                setIndexName('');
+                setGenCount(1000);
+                setChunkSize(1000);
+                setStartDate(DEFAULT_START_ISO);
+                setEndDate(DEFAULT_END_ISO);
+                setRangeStart('');
+                setRangeEnd('');
+                setGranularity('hour');
+                setDistribution('uniform');
+                setRate(10);
                 setGenStatus('Cleared configuration');
               }}
             >
@@ -1099,26 +1483,37 @@ function App() {
         <pre className="result">{indicesStatus}</pre>
         <div className="row">
           <div className="col">
-            <label>Range Start (ISO)</label>
-            <input value={rangeStart} onChange={e => setRangeStart(e.target.value)} placeholder={DEFAULT_START_ISO} />
-          </div>
-          <div className="col">
-            <label>Range End (ISO)</label>
-            <input value={rangeEnd} onChange={e => setRangeEnd(e.target.value)} placeholder={DEFAULT_END_ISO} />
-          </div>
-        </div>
-        <div className="row">
-          <div className="col">
             <label>Range Preset</label>
             <select value={rangePreset} onChange={e => {
               const p = e.target.value;
               setRangePreset(p);
               const now = new Date();
               let start = new Date(now);
-              if (p === 'last-24h') start = new Date(now.getTime() - 24 * 3600_000);
-              else if (p === 'last-7d') start = new Date(now.getTime() - 7 * 24 * 3600_000);
-              else if (p === 'last-30d') start = new Date(now.getTime() - 30 * 24 * 3600_000);
-              else if (p === 'this-week') {
+              
+              if (p === 'custom') {
+                // Don't change dates for custom - let user enter manually
+                return;
+              } else if (p === 'last-24h') {
+                start = new Date(now.getTime() - 24 * 3600_000);
+              } else if (p === 'last-7d') {
+                start = new Date(now.getTime() - 7 * 24 * 3600_000);
+              } else if (p === 'last-30d') {
+                start = new Date(now.getTime() - 30 * 24 * 3600_000);
+              } else if (p === 'last-90d') {
+                start = new Date(now.getTime() - 90 * 24 * 3600_000);
+              } else if (p === 'last-180d') {
+                start = new Date(now.getTime() - 180 * 24 * 3600_000);
+              } else if (p === 'last-1y') {
+                start = new Date(now.getTime() - 365 * 24 * 3600_000);
+              } else if (p === 'last-2y') {
+                start = new Date(now.getTime() - 2 * 365 * 24 * 3600_000);
+              } else if (p === 'last-3y') {
+                start = new Date(now.getTime() - 3 * 365 * 24 * 3600_000);
+              } else if (p === 'last-5y') {
+                start = new Date(now.getTime() - 5 * 365 * 24 * 3600_000);
+              } else if (p === 'last-10y') {
+                start = new Date(now.getTime() - 10 * 365 * 24 * 3600_000);
+              } else if (p === 'this-week') {
                 const d = new Date(now);
                 const day = d.getDay();
                 const diff = (day + 6) % 7;
@@ -1128,16 +1523,81 @@ function App() {
                 start = new Date(now.getFullYear(), now.getMonth(), 1);
               } else if (p === 'this-year') {
                 start = new Date(now.getFullYear(), 0, 1);
+              } else if (p === 'last-year') {
+                start = new Date(now.getFullYear() - 1, 0, 1);
+                const end = new Date(now.getFullYear() - 1, 11, 31, 23, 59, 59);
+                const startIso = start.toISOString();
+                const endIso = end.toISOString();
+                setRangeStart(startIso);
+                setRangeEnd(endIso);
+
+                // Auto-populate Count based on this full-year range
+                const ms = Math.max(0, end.getTime() - start.getTime());
+                const unitMs =
+                  countUnit === 'second'
+                    ? 1000
+                    : countUnit === 'minute'
+                    ? 60_000
+                    : countUnit === 'hour'
+                    ? 3_600_000
+                    : 86_400_000;
+                let c = Math.floor(ms / unitMs);
+                if (c === 0 && countUnit === 'day') c = 1;
+                setGenCount(c);
+                return;
+              } else if (p === 'last-2-years') {
+                start = new Date(now.getFullYear() - 2, 0, 1);
+              } else if (p === 'last-5-years') {
+                start = new Date(now.getFullYear() - 5, 0, 1);
+              } else if (p === 'last-10-years') {
+                start = new Date(now.getFullYear() - 10, 0, 1);
               }
-              setRangeStart(start.toISOString());
-              setRangeEnd(now.toISOString());
+              
+              const startIso = start.toISOString();
+              const endIso = now.toISOString();
+              setRangeStart(startIso);
+              setRangeEnd(endIso);
+
+              // Auto-populate Count based on new range and current unit
+              const ms = Math.max(0, now.getTime() - start.getTime());
+              const unitMs =
+                countUnit === 'second'
+                  ? 1000
+                  : countUnit === 'minute'
+                  ? 60_000
+                  : countUnit === 'hour'
+                  ? 3_600_000
+                  : 86_400_000;
+              let c = Math.floor(ms / unitMs);
+              if (c === 0 && countUnit === 'day') c = 1;
+              setGenCount(c);
             }}>
+              <optgroup label="Recent">
               <option value="last-24h">Last 24 hours</option>
               <option value="last-7d">Last 7 days</option>
               <option value="last-30d">Last 30 days</option>
+                <option value="last-90d">Last 90 days</option>
+                <option value="last-180d">Last 180 days</option>
+              </optgroup>
+              <optgroup label="Years">
+                <option value="last-1y">Last 1 year</option>
+                <option value="last-2y">Last 2 years</option>
+                <option value="last-3y">Last 3 years</option>
+                <option value="last-5y">Last 5 years</option>
+                <option value="last-10y">Last 10 years</option>
+              </optgroup>
+              <optgroup label="Calendar Periods">
               <option value="this-week">This week</option>
               <option value="this-month">This month</option>
               <option value="this-year">This year</option>
+                <option value="last-year">Last year (full year)</option>
+                <option value="last-2-years">Last 2 years</option>
+                <option value="last-5-years">Last 5 years</option>
+                <option value="last-10-years">Last 10 years</option>
+              </optgroup>
+              <optgroup label="Custom">
+                <option value="custom">Custom Range (Manual Entry)</option>
+              </optgroup>
             </select>
           </div>
           <div className="col">
@@ -1157,6 +1617,68 @@ function App() {
             <button onClick={() => setGenCount(calcCount)}>Apply Count</button>
           </div>
         </div>
+        
+        {/* Custom Range Inputs - Show when "custom" is selected */}
+        {rangePreset === 'custom' && (
+          <div className="row" style={{ marginTop: '1em', padding: '1em', background: '#f8f9fa', borderRadius: '4px', border: '1px solid #dee2e6' }}>
+            <div className="col">
+              <label>Range Start (ISO 8601)</label>
+              <input 
+                type="datetime-local"
+                value={rangeStart ? new Date(rangeStart).toISOString().slice(0, 16) : ''}
+                onChange={e => {
+                  if (e.target.value) {
+                    setRangeStart(new Date(e.target.value).toISOString());
+                  }
+                }}
+                placeholder={DEFAULT_START_ISO}
+                style={{ width: '100%' }}
+              />
+              <input 
+                type="text"
+                value={rangeStart}
+                onChange={e => setRangeStart(e.target.value)}
+                placeholder={DEFAULT_START_ISO}
+                style={{ width: '100%', marginTop: '0.5em', fontSize: '0.85em' }}
+              />
+              <small style={{ color: '#666', fontSize: '0.8em' }}>Or enter ISO 8601 format: 2024-01-15T10:30:00Z</small>
+            </div>
+            <div className="col">
+              <label>Range End (ISO 8601)</label>
+              <input 
+                type="datetime-local"
+                value={rangeEnd ? new Date(rangeEnd).toISOString().slice(0, 16) : ''}
+                onChange={e => {
+                  if (e.target.value) {
+                    setRangeEnd(new Date(e.target.value).toISOString());
+                  }
+                }}
+                placeholder={DEFAULT_END_ISO}
+                style={{ width: '100%' }}
+              />
+              <input 
+                type="text"
+                value={rangeEnd}
+                onChange={e => setRangeEnd(e.target.value)}
+                placeholder={DEFAULT_END_ISO}
+                style={{ width: '100%', marginTop: '0.5em', fontSize: '0.85em' }}
+              />
+              <small style={{ color: '#666', fontSize: '0.8em' }}>Or enter ISO 8601 format: 2024-01-16T10:30:00Z</small>
+            </div>
+          </div>
+        )}
+        
+        {/* Show current range for non-custom presets */}
+        {rangePreset !== 'custom' && (
+          <div className="row" style={{ marginTop: '0.5em', fontSize: '0.9em', color: '#666' }}>
+            <div className="col">
+              <strong>Start:</strong> {rangeStart ? new Date(rangeStart).toLocaleString() : 'Not set'}
+            </div>
+            <div className="col">
+              <strong>End:</strong> {rangeEnd ? new Date(rangeEnd).toLocaleString() : 'Not set'}
+            </div>
+          </div>
+        )}
         <div className="row">
           <button disabled={!selected} onClick={async () => {
             if (!selected) return;
@@ -1457,10 +1979,120 @@ function App() {
               <div className="row">
                 <div className="col">
                   <label>Country</label>
-                  <select value={ruleInputs.country ?? ''} onChange={e => setRuleInputs(prev => ({ ...prev, country: e.target.value }))}>
-                    <option value="US">US</option>
-                    <option value="GB">GB</option>
-                    <option value="IN">IN</option>
+                  <select value={ruleInputs.country ?? 'US'} onChange={e => setRuleInputs(prev => ({ ...prev, country: e.target.value }))} style={{ width: '100%' }}>
+                    <optgroup label="North America">
+                      <option value="US">🇺🇸 United States (+1)</option>
+                      <option value="CA">🇨🇦 Canada (+1)</option>
+                      <option value="MX">🇲🇽 Mexico (+52)</option>
+                    </optgroup>
+                    <optgroup label="Europe">
+                      <option value="GB">🇬🇧 United Kingdom (+44)</option>
+                      <option value="DE">🇩🇪 Germany (+49)</option>
+                      <option value="FR">🇫🇷 France (+33)</option>
+                      <option value="IT">🇮🇹 Italy (+39)</option>
+                      <option value="ES">🇪🇸 Spain (+34)</option>
+                      <option value="NL">🇳🇱 Netherlands (+31)</option>
+                      <option value="BE">🇧🇪 Belgium (+32)</option>
+                      <option value="SE">🇸🇪 Sweden (+46)</option>
+                      <option value="NO">🇳🇴 Norway (+47)</option>
+                      <option value="DK">🇩🇰 Denmark (+45)</option>
+                      <option value="FI">🇫🇮 Finland (+358)</option>
+                      <option value="CH">🇨🇭 Switzerland (+41)</option>
+                      <option value="AT">🇦🇹 Austria (+43)</option>
+                      <option value="PT">🇵🇹 Portugal (+351)</option>
+                      <option value="GR">🇬🇷 Greece (+30)</option>
+                      <option value="IE">🇮🇪 Ireland (+353)</option>
+                      <option value="PL">🇵🇱 Poland (+48)</option>
+                      <option value="CZ">🇨🇿 Czech Republic (+420)</option>
+                      <option value="RO">🇷🇴 Romania (+40)</option>
+                      <option value="HU">🇭🇺 Hungary (+36)</option>
+                      <option value="UA">🇺🇦 Ukraine (+380)</option>
+                      <option value="BY">🇧🇾 Belarus (+375)</option>
+                      <option value="GE">🇬🇪 Georgia (+995)</option>
+                      <option value="AZ">🇦🇿 Azerbaijan (+994)</option>
+                      <option value="AM">🇦🇲 Armenia (+374)</option>
+                    </optgroup>
+                    <optgroup label="Asia-Pacific">
+                      <option value="IN">🇮🇳 India (+91)</option>
+                      <option value="CN">🇨🇳 China (+86)</option>
+                      <option value="JP">🇯🇵 Japan (+81)</option>
+                      <option value="KR">🇰🇷 South Korea (+82)</option>
+                      <option value="ID">🇮🇩 Indonesia (+62)</option>
+                      <option value="TH">🇹🇭 Thailand (+66)</option>
+                      <option value="VN">🇻🇳 Vietnam (+84)</option>
+                      <option value="PH">🇵🇭 Philippines (+63)</option>
+                      <option value="MY">🇲🇾 Malaysia (+60)</option>
+                      <option value="SG">🇸🇬 Singapore (+65)</option>
+                      <option value="AU">🇦🇺 Australia (+61)</option>
+                      <option value="NZ">🇳🇿 New Zealand (+64)</option>
+                      <option value="PK">🇵🇰 Pakistan (+92)</option>
+                      <option value="BD">🇧🇩 Bangladesh (+880)</option>
+                      <option value="LK">🇱🇰 Sri Lanka (+94)</option>
+                      <option value="NP">🇳🇵 Nepal (+977)</option>
+                      <option value="MM">🇲🇲 Myanmar (+95)</option>
+                      <option value="KH">🇰🇭 Cambodia (+855)</option>
+                      <option value="LA">🇱🇦 Laos (+856)</option>
+                      <option value="UZ">🇺🇿 Uzbekistan (+998)</option>
+                      <option value="KZ">🇰🇿 Kazakhstan (+7)</option>
+                    </optgroup>
+                    <optgroup label="Middle East">
+                      <option value="SA">🇸🇦 Saudi Arabia (+966)</option>
+                      <option value="AE">🇦🇪 UAE (+971)</option>
+                      <option value="TR">🇹🇷 Turkey (+90)</option>
+                      <option value="EG">🇪🇬 Egypt (+20)</option>
+                      <option value="IL">🇮🇱 Israel (+972)</option>
+                      <option value="JO">🇯🇴 Jordan (+962)</option>
+                      <option value="LB">🇱🇧 Lebanon (+961)</option>
+                      <option value="KW">🇰🇼 Kuwait (+965)</option>
+                      <option value="QA">🇶🇦 Qatar (+974)</option>
+                      <option value="BH">🇧🇭 Bahrain (+973)</option>
+                      <option value="OM">🇴🇲 Oman (+968)</option>
+                    </optgroup>
+                    <optgroup label="Africa">
+                      <option value="ZA">🇿🇦 South Africa (+27)</option>
+                      <option value="NG">🇳🇬 Nigeria (+234)</option>
+                      <option value="KE">🇰🇪 Kenya (+254)</option>
+                      <option value="GH">🇬🇭 Ghana (+233)</option>
+                      <option value="CI">🇨🇮 Ivory Coast (+225)</option>
+                      <option value="SN">🇸🇳 Senegal (+221)</option>
+                      <option value="UG">🇺🇬 Uganda (+256)</option>
+                      <option value="TZ">🇹🇿 Tanzania (+255)</option>
+                      <option value="ET">🇪🇹 Ethiopia (+251)</option>
+                      <option value="ZM">🇿🇲 Zambia (+260)</option>
+                      <option value="ZW">🇿🇼 Zimbabwe (+263)</option>
+                      <option value="MZ">🇲🇿 Mozambique (+258)</option>
+                      <option value="AO">🇦🇴 Angola (+244)</option>
+                      <option value="CM">🇨🇲 Cameroon (+237)</option>
+                      <option value="CD">🇨🇩 Congo DR (+243)</option>
+                      <option value="MG">🇲🇬 Madagascar (+261)</option>
+                      <option value="ML">🇲🇱 Mali (+223)</option>
+                      <option value="NE">🇳🇪 Niger (+227)</option>
+                      <option value="BF">🇧🇫 Burkina Faso (+226)</option>
+                      <option value="BJ">🇧🇯 Benin (+229)</option>
+                      <option value="TG">🇹🇬 Togo (+228)</option>
+                      <option value="SL">🇸🇱 Sierra Leone (+232)</option>
+                      <option value="LR">🇱🇷 Liberia (+231)</option>
+                      <option value="GN">🇬🇳 Guinea (+224)</option>
+                      <option value="GW">🇬🇼 Guinea-Bissau (+245)</option>
+                      <option value="GM">🇬🇲 Gambia (+220)</option>
+                      <option value="MR">🇲🇷 Mauritania (+222)</option>
+                      <option value="MA">🇲🇦 Morocco (+212)</option>
+                      <option value="DZ">🇩🇿 Algeria (+213)</option>
+                      <option value="TN">🇹🇳 Tunisia (+216)</option>
+                      <option value="LY">🇱🇾 Libya (+218)</option>
+                      <option value="SD">🇸🇩 Sudan (+249)</option>
+                    </optgroup>
+                    <optgroup label="Latin America">
+                      <option value="BR">🇧🇷 Brazil (+55)</option>
+                      <option value="AR">🇦🇷 Argentina (+54)</option>
+                      <option value="CL">🇨🇱 Chile (+56)</option>
+                      <option value="CO">🇨🇴 Colombia (+57)</option>
+                      <option value="PE">🇵🇪 Peru (+51)</option>
+                      <option value="VE">🇻🇪 Venezuela (+58)</option>
+                    </optgroup>
+                    <optgroup label="Russia & CIS">
+                      <option value="RU">🇷🇺 Russia (+7)</option>
+                    </optgroup>
                   </select>
                 </div>
               </div>
@@ -1535,7 +2167,7 @@ function App() {
                 } else if (ruleType === 'prefix') {
                   rule = { kind: 'prefix', prefix: ruleInputs.prefix ?? '' };
                 } else if (ruleType === 'phone') {
-                  const country = (ruleInputs.country ?? 'US') as 'US' | 'GB' | 'IN';
+                  const country = (ruleInputs.country ?? 'US') as PhoneRule['country'];
                   rule = { kind: 'phone', country };
                 } else if (ruleType === 'manual') {
                   rule = { kind: 'manual', value: ruleInputs.value ?? '' };
@@ -1845,6 +2477,74 @@ function App() {
             }
           }}>Confirm & Generate + Insert</button>
           <button disabled={!uploading} onClick={() => { bulkCtrl?.abort(); }}>Cancel</button>
+        </div>
+
+        {/* Export generated data for multi-database use (ES, Postgres, MySQL, etc.) */}
+        <div className="row">
+          <button
+            disabled={!mappingLoaded || uploading || !previewReady || previewConfig !== currentPreviewConfig}
+            onClick={() => {
+              if (!mappingLoaded) return;
+              const start = rangeStart ? new Date(rangeStart) : new Date(Date.now() - 86400000);
+              const end = rangeEnd ? new Date(rangeEnd) : new Date();
+              const docs = generateDocs(mappingLoaded, genCount, { start, end }, rules);
+              if (!docs || docs.length === 0) return;
+              const blob = new Blob([JSON.stringify(docs, null, 2)], { type: 'application/json' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `schema-generated-${indexName || 'data'}-${new Date().toISOString()}.json`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            📥 Download JSON (for any DB)
+          </button>
+          <button
+            disabled={!mappingLoaded || uploading || !previewReady || previewConfig !== currentPreviewConfig}
+            onClick={() => {
+              if (!mappingLoaded) return;
+              const start = rangeStart ? new Date(rangeStart) : new Date(Date.now() - 86400000);
+              const end = rangeEnd ? new Date(rangeEnd) : new Date();
+              const docs = generateDocs(mappingLoaded, genCount, { start, end }, rules);
+              if (!docs || docs.length === 0) return;
+              
+              const headers = Array.from(
+                docs.reduce<Set<string>>((set, d) => {
+                  Object.keys(d as Record<string, unknown>).forEach(k => set.add(k));
+                  return set;
+                }, new Set<string>())
+              );
+              
+              const rows = docs.map(d =>
+                headers.map(h => {
+                  const v = (d as Record<string, unknown>)[h];
+                  const s =
+                    v === null || v === undefined
+                      ? ''
+                      : typeof v === 'object'
+                      ? JSON.stringify(v)
+                      : String(v);
+                  return `"${s.replace(/"/g, '""')}"`;
+                }).join(',')
+              );
+              
+              const csv = [headers.join(','), ...rows].join('\n');
+              const blob = new Blob([csv], { type: 'text/csv' });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `schema-generated-${indexName || 'data'}-${new Date().toISOString()}.csv`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            }}
+          >
+            📊 Download CSV (for SQL DBs)
+          </button>
         </div>
         <h3>Real-Time Mode</h3>
         <p style={{ fontSize: '0.9em', color: '#666' }}>
@@ -2990,8 +3690,8 @@ function App() {
       <section>
         <div className="section-header">
           <h2>Audit</h2>
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.9rem', color: '#9aa4b2' }}>Total Entries: {auditLog.length}</span>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: '0.9rem', color: '#9aa4b2', marginRight: '0.25rem' }}>Total Entries: {auditLog.length}</span>
             <button 
               onClick={() => {
                 const blob = new Blob([JSON.stringify(auditLog, null, 2)], { type: 'application/json' });

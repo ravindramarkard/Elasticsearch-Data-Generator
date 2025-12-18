@@ -26,6 +26,7 @@ export type GeneratorConfig = {
   rules: FieldRules;
   indexName: string;
   docCount: number;
+  chunkSize?: number;
   startDate?: string;
   endDate?: string;
   granularity?: string;

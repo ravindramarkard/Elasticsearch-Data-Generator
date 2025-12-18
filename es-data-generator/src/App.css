@@ -30,11 +30,11 @@
 }
 
 section {
-  border: 1px solid #334155;
+  border: 1px solid var(--border-color, #334155);
   padding: 1rem;
   border-radius: 8px;
   margin-bottom: 1rem;
-  background: #0f141d;
+  background: var(--bg-secondary, #0f141d);
 }
 
 .section-header {
@@ -68,15 +68,15 @@ section {
 label {
   display: block;
   font-size: 0.9rem;
-  color: #cbd5e1;
+  color: var(--text-secondary, #cbd5e1);
 }
 input, select, button {
   width: 100%;
   padding: 0.5rem;
   border-radius: 6px;
-  border: 1px solid #334155;
-  background: #1a1f29;
-  color: #e7e9ee;
+  border: 1px solid var(--border-color, #334155);
+  background: var(--bg-tertiary, #1a1f29);
+  color: var(--text-primary, #e7e9ee);
 }
 button {
   cursor: pointer;
@@ -85,10 +85,10 @@ button {
   width: 100%;
 }
 .result {
-  background: #0f141d;
+  background: var(--bg-secondary, #0f141d);
   padding: 0.75rem;
   border-radius: 6px;
-  border: 1px solid #334155;
+  border: 1px solid var(--border-color, #334155);
   min-height: 3rem;
   white-space: pre-wrap;
   overflow-x: auto;
@@ -112,9 +112,9 @@ button {
   margin-top: 0.5rem;
   padding: 0.5rem;
   border-radius: 6px;
-  border: 1px solid #334155;
-  background: #1a1f29;
-  color: #e7e9ee;
+  border: 1px solid var(--border-color, #334155);
+  background: var(--bg-tertiary, #1a1f29);
+  color: var(--text-primary, #e7e9ee);
   box-sizing: border-box;
   font-family: 'Courier New', monospace;
   resize: vertical;
@@ -130,18 +130,18 @@ button {
   margin-left: 0.5rem;
 }
 .note {
-  color: #9aa4b2;
+  color: var(--text-tertiary, #9aa4b2);
   font-size: 0.85rem;
 }
 .table-wrap {
   max-height: 360px;
   overflow: auto;
   scrollbar-gutter: stable;
-  border: 1px solid #334155;
+  border: 1px solid var(--border-color, #334155);
   border-radius: 6px;
   width: 100%;
   -webkit-overflow-scrolling: touch;
-  background: #0f141d;
+  background: var(--bg-secondary, #0f141d);
   box-sizing: border-box;
 }
 
@@ -163,7 +163,7 @@ table {
   min-width: 640px;
 }
 th, td {
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid var(--border-color, #334155);
   padding: 6px 8px;
   text-align: left;
   vertical-align: top;
@@ -173,20 +173,20 @@ th, td {
 thead th {
   position: sticky;
   top: 0;
-  background: #1a1f29;
+  background: var(--bg-tertiary, #1a1f29);
   z-index: 1;
   white-space: nowrap;
 }
 tbody tr:nth-child(odd) {
-  background: #0d1220;
+  background: var(--bg-active, #0d1220);
 }
 button:hover {
-  background: #243042;
+  background: var(--bg-hover, #243042);
 }
 input:focus, select:focus, button:focus, textarea:focus {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid var(--accent-color, #3b82f6);
   outline-offset: 2px;
-  border-color: #3b82f6;
+  border-color: var(--accent-color, #3b82f6);
 }
 .table-wrap.compact th, .table-wrap.compact td {
   padding: 4px 6px;
@@ -206,10 +206,10 @@ input:focus, select:focus, button:focus, textarea:focus {
   margin-left: 1rem;
 }
 .json-leaf .json-key {
-  color: #8aa1ff;
+  color: var(--json-key, #8aa1ff);
 }
 .json-leaf .json-value {
-  color: #d1d5db;
+  color: var(--json-value, #d1d5db);
 }
 
 /* Mobile styles */
@@ -284,8 +284,8 @@ html, body {
   padding: 0;
   width: 100%;
   min-height: 100vh;
-  background: #0f1115;
-  color: #e7e9ee;
+  background: var(--bg-primary, #0f1115);
+  color: var(--text-primary, #e7e9ee);
   box-sizing: border-box;
   overflow-x: hidden;
 }
@@ -300,15 +300,15 @@ html, body {
   align-items: center;
   padding: 0.5rem;
   border-radius: 16px;
-  border: 1px solid #334155;
-  background: #0d1220;
+  border: 1px solid var(--border-color, #334155);
+  background: var(--bg-active, #0d1220);
   margin-bottom: 1rem;
 }
 .tab {
   width: auto;
   border: none;
   background: transparent;
-  color: #9aa4b2;
+  color: var(--text-tertiary, #9aa4b2);
   padding: 0.5rem 0.75rem;
   border-radius: 12px;
   display: inline-flex;
@@ -317,13 +317,13 @@ html, body {
   font-weight: 600;
 }
 .tab.active {
-  background: #e7e9ee;
-  color: #0f1115;
+  background: var(--bg-tab-active, #e7e9ee);
+  color: var(--text-tab-active, #0f1115);
   box-shadow: 0 2px 6px rgba(0,0,0,0.25);
 }
 .tab:hover {
   background: transparent;
-  color: #cbd5e1;
+  color: var(--text-secondary, #cbd5e1);
 }
 .tab-icon {
   font-size: 1rem;

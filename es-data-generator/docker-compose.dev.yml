@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  es-data-generator-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: es-data-generator-dev
+    ports:
+      - "5173:5173"
+    volumes:
+      # Mount source code for hot reload
+      - ./src:/app/src
+      - ./public:/app/public
+      - ./index.html:/app/index.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./tsconfig.json:/app/tsconfig.json
+      - ./tsconfig.node.json:/app/tsconfig.node.json
+      # Prevent overwriting node_modules
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
+    networks:
+      - es-network
+
+networks:
+  es-network:
+    driver: bridge
+
