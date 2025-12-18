@@ -147,6 +147,89 @@ export async function getIndexCount(conn: Connection, index: string): Promise<{ 
   }
 }
 
+// Scroll all documents from an index. Used by features like "Copy Index".
+export async function scrollAllDocuments(
+  conn: Connection,
+  index: string,
+  options?: { batchSize?: number; signal?: AbortSignal; onProgress?: (info: { total: number; processed: number }) => void }
+): Promise<{ ok: boolean; status: number; documents?: Array<{ _source: Record<string, unknown> }>; error?: string }> {
+  const base = getProxiedUrl(conn.url).replace(/\/$/, '');
+  const batchSize = options?.batchSize ?? 1000;
+  const onProgress = options?.onProgress;
+  const signal = options?.signal;
+  const documents: Array<{ _source: Record<string, unknown> }> = [];
+
+  try {
+    let res = await fetch(`${base}/${encodeURIComponent(index)}/_search?scroll=1m`, {
+      method: 'POST',
+      headers: { ...buildHeaders(conn), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ size: batchSize, sort: ['_doc'], query: { match_all: {} } }),
+      signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return { ok: false, status: res.status, error: text || `HTTP ${res.status}` };
+    }
+    let json = await res.json() as any;
+    let scrollId: string | undefined = json._scroll_id;
+    let hits: any[] = (json.hits && Array.isArray(json.hits.hits)) ? json.hits.hits : [];
+    const total = json.hits && typeof json.hits.total === 'object' ? Number(json.hits.total.value ?? hits.length) : hits.length;
+
+    while (hits.length > 0) {
+      for (const h of hits) {
+        if (signal?.aborted) {
+          return { ok: false, status: 0, error: 'Cancelled' };
+        }
+        if (h && typeof h === 'object' && h._source && typeof h._source === 'object') {
+          documents.push({ _source: h._source as Record<string, unknown> });
+        }
+      }
+      if (onProgress) onProgress({ total, processed: documents.length });
+
+      if (!scrollId) break;
+      res = await fetch(`${base}/_search/scroll`, {
+        method: 'POST',
+        headers: { ...buildHeaders(conn), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scroll: '1m', scroll_id: scrollId }),
+        signal,
+      });
+      if (!res.ok) break;
+      json = await res.json() as any;
+      scrollId = json._scroll_id;
+      hits = (json.hits && Array.isArray(json.hits.hits)) ? json.hits.hits : [];
+    }
+
+    return { ok: true, status: 200, documents };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Network error';
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
+// Create an index with the given mapping (if not already existing)
+export async function createIndexWithMapping(
+  conn: Connection,
+  index: string,
+  mappings: unknown
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const base = getProxiedUrl(conn.url).replace(/\/$/, '');
+  try {
+    const res = await fetch(`${base}/${encodeURIComponent(index)}`, {
+      method: 'PUT',
+      headers: { ...buildHeaders(conn), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mappings }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      return { ok: false, status: res.status, error: text || `HTTP ${res.status}` };
+    }
+    return { ok: true, status: res.status };
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : 'Network error';
+    return { ok: false, status: 0, error: msg };
+  }
+}
+
 function sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
 export async function bulkInsert(

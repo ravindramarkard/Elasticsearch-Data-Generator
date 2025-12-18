@@ -3,7 +3,7 @@ import './App.css';
 import './themes.css';
 import * as XLSX from 'xlsx';
 import type { Connection, AuthType } from './esClient';
-import { pingHealth, fetchMapping, bulkInsert, translateSql, executeSql, nextSqlPage, closeSqlCursor, listIndices, listDataStreams, searchPreview, deleteByQueryAsync, updateByQueryAsync, updateById, cancelTask, getIndexCount } from './esClient';
+import { pingHealth, fetchMapping, bulkInsert, translateSql, executeSql, nextSqlPage, closeSqlCursor, listIndices, listDataStreams, searchPreview, deleteByQueryAsync, updateByQueryAsync, updateById, cancelTask, getIndexCount, scrollAllDocuments, createIndexWithMapping } from './esClient';
 import { loadConnections, saveConnections, loadGeneratorConfigs, saveGeneratorConfig, deleteGeneratorConfig, loadLastGenerator, saveLastGenerator, loadAuditLogs, saveAuditLogs, clearAuditLogs, deleteOldAuditLogs } from './storage';
 import type { GeneratorConfig, AuditEntry } from './storage';
 import { extractMappingFromResponse, extractAnyMapping, generateDocs, diffMappings, listFieldsByType, flattenMappingFields, getDateFormatForField, formatDate, calculateNextPosition, CITIES, SEAPORTS, VEHICLE_LOCATIONS } from './generator';
@@ -369,6 +369,17 @@ function App() {
   const [importMultipleFiles, setImportMultipleFiles] = useState<File[]>([]);
   const [importCurrentFileIndex, setImportCurrentFileIndex] = useState<number>(0);
   const [importFileResults, setImportFileResults] = useState<Array<{ fileName: string; status: 'pending' | 'processing' | 'success' | 'error'; rows: number; succeeded?: number; failed?: number; error?: string }>>([]);
+
+  // Copy Index state (within same cluster or across environments)
+  const [copySourceIndex, setCopySourceIndex] = useState<string>('');
+  const [copyTargetIndex, setCopyTargetIndex] = useState<string>('');
+  const [copySourceConnection, setCopySourceConnection] = useState<string>('');
+  const [copyTargetConnection, setCopyTargetConnection] = useState<string>('');
+  const [copyInProgress, setCopyInProgress] = useState<boolean>(false);
+  const [copyStatus, setCopyStatus] = useState<string>('');
+  const [copyProgress, setCopyProgress] = useState<{ total: number; processed: number; documentsCopied: number }>({ total: 0, processed: 0, documentsCopied: 0 });
+  const [copyAbortController, setCopyAbortController] = useState<AbortController | null>(null);
+  const [copySourceIndices, setCopySourceIndices] = useState<string[]>([]);
 
   function logAudit(action: string, category: AuditEntry['category'], details: string, status: AuditEntry['status'] = 'success', metadata?: Record<string, unknown>) {
     const entry: AuditEntry = {
@@ -796,7 +807,7 @@ function App() {
   const [cmpAdded, setCmpAdded] = useState<string[]>([]);
   const [cmpRemoved, setCmpRemoved] = useState<string[]>([]);
   const [cmpChanged, setCmpChanged] = useState<TypeChange[]>([]);
-  const [activeTab, setActiveTab] = useState<'connections' | 'schema' | 'compare' | 'sql' | 'update' | 'delete' | 'audit' | 'import'>('connections');
+  const [activeTab, setActiveTab] = useState<'connections' | 'schema' | 'compare' | 'sql' | 'update' | 'audit' | 'import' | 'copy'>('connections');
   const [delIndex, setDelIndex] = useState<string>('');
   const [delQueryText, setDelQueryText] = useState<string>('');
   const [delExampleId, setDelExampleId] = useState<string>('');
@@ -859,6 +870,26 @@ function App() {
       }
     })();
   }, [selected]);
+
+  // Load source indices when source connection changes (for Copy Index)
+  useEffect(() => {
+    (async () => {
+      if (!copySourceConnection) {
+        setCopySourceIndices([]);
+        return;
+      }
+      const sourceConn = connections.find(c => c.id === copySourceConnection);
+      if (!sourceConn) return;
+
+      const res = await listIndices(sourceConn);
+      if (res.ok && res.names) {
+        const names = res.names.filter(n => !n.startsWith('.'));
+        setCopySourceIndices(names);
+      } else {
+        setCopySourceIndices([]);
+      }
+    })();
+  }, [copySourceConnection, connections]);
 
   // Load last used configuration on mount
   useEffect(() => {
@@ -1032,10 +1063,10 @@ function App() {
         <button className={activeTab === 'schema' ? 'tab active' : 'tab'} onClick={() => setActiveTab('schema')}><span className="tab-icon">📐</span><span>Schema Generator</span></button>
         <button className={activeTab === 'sql' ? 'tab active' : 'tab'} onClick={() => setActiveTab('sql')}><span className="tab-icon">🧾</span><span>Elasticsearch Editor (Using SQL Query)</span></button>
         <button className={activeTab === 'compare' ? 'tab active' : 'tab'} onClick={() => setActiveTab('compare')}><span className="tab-icon">🔍</span><span>Compare Schemas</span></button>
-        <button className={activeTab === 'update' ? 'tab active' : 'tab'} onClick={() => setActiveTab('update')}><span className="tab-icon">✏️</span><span>Update By Query</span></button>
-        <button className={activeTab === 'delete' ? 'tab active' : 'tab'} onClick={() => setActiveTab('delete')}><span className="tab-icon">🗑️</span><span>Delete By Query</span></button>
+        <button className={activeTab === 'update' ? 'tab active' : 'tab'} onClick={() => setActiveTab('update')}><span className="tab-icon">✏️</span><span>Update / Delete By Query</span></button>
         <button className={activeTab === 'audit' ? 'tab active' : 'tab'} onClick={() => setActiveTab('audit')}><span className="tab-icon">📋</span><span>Audit</span></button>
         <button className={activeTab === 'import' ? 'tab active' : 'tab'} onClick={() => setActiveTab('import')}><span className="tab-icon">📤</span><span>Import Data</span></button>
+        <button className={activeTab === 'copy' ? 'tab active' : 'tab'} onClick={() => setActiveTab('copy')}><span className="tab-icon">📦</span><span>Copy Index</span></button>
       </div>
 
       {activeTab === 'connections' && (
@@ -3332,22 +3363,36 @@ function App() {
       {activeTab === 'update' && (
       <section>
         <div className="section-header">
-          <h2>Update By Query</h2>
+          <h2>Update / Delete By Query</h2>
         </div>
+        {/* Shared index + preview size */}
         <div className="row">
           <div className="col">
             <SearchableSelect
               label="Index"
               value={updIndex}
-              onChange={setUpdIndex}
+              onChange={value => { setUpdIndex(value); setDelIndex(value); }}
               options={indices}
               placeholder="Type to search indices..."
             />
           </div>
           <div className="col">
             <label>Preview Size</label>
-            <input type="number" value={updPreviewSize} onChange={e => setUpdPreviewSize(Number(e.target.value))} />
+            <input
+              type="number"
+              value={updPreviewSize}
+              onChange={e => {
+                const v = Number(e.target.value) || 10;
+                setUpdPreviewSize(v);
+                setDelPreviewSize(v);
+              }}
+            />
           </div>
+        </div>
+
+        {/* UPDATE BY QUERY */}
+        <div className="section-header" style={{ marginTop: '1.5em' }}>
+          <h3>Update By Query</h3>
         </div>
         <div className="row">
           <div className="col">
@@ -3475,28 +3520,10 @@ function App() {
             </div>
           </div>
         )}
-      </section>
-      )}
 
-      {activeTab === 'delete' && (
-      <section>
-        <div className="section-header">
-          <h2>Delete By Query</h2>
-        </div>
-        <div className="row">
-          <div className="col">
-            <SearchableSelect
-              label="Index"
-              value={delIndex}
-              onChange={setDelIndex}
-              options={indices}
-              placeholder="Type to search indices..."
-            />
-          </div>
-          <div className="col">
-            <label>Preview Size</label>
-            <input type="number" value={delPreviewSize} onChange={e => setDelPreviewSize(Number(e.target.value))} />
-          </div>
+        {/* DELETE BY QUERY */}
+        <div className="section-header" style={{ marginTop: '2em' }}>
+          <h3>Delete By Query</h3>
         </div>
         <div className="row">
           <div className="col">
@@ -4423,6 +4450,245 @@ function App() {
             )}
           </>
         )}
+      </section>
+      )}
+
+      {activeTab === 'copy' && (
+      <section>
+        <div className="section-header">
+          <h2>📋 Copy Index</h2>
+          <p style={{ fontSize: '0.9em', color: '#666', marginTop: '0.5em' }}>
+            Copy an index within the same cluster or between different environments. This copies the mapping and all documents.
+          </p>
+        </div>
+
+        <div className="row">
+          <div className="col">
+            <label>Source Connection</label>
+            <select value={copySourceConnection} onChange={e => setCopySourceConnection(e.target.value)}>
+              <option value="">Select source connection...</option>
+              {connections.map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({c.url})</option>
+              ))}
+            </select>
+          </div>
+          <div className="col">
+            <label>Source Index</label>
+            <SearchableSelect
+              value={copySourceIndex}
+              onChange={setCopySourceIndex}
+              options={copySourceIndices.length > 0 ? copySourceIndices : indices}
+              placeholder="Type to search indices..."
+            />
+            {copySourceConnection && (
+              <button 
+                style={{ marginTop: '0.5em', fontSize: '0.85em', padding: '0.25em 0.5em' }}
+                onClick={async () => {
+                  const sourceConn = connections.find(c => c.id === copySourceConnection);
+                  if (sourceConn) {
+                    setCopyStatus('Loading source indices...');
+                    const res = await listIndices(sourceConn);
+                    if (res.ok && res.names) {
+                      const names = res.names.filter(n => !n.startsWith('.'));
+                      setCopySourceIndices(names);
+                      setCopyStatus(`Loaded ${names.length} indices`);
+                    } else {
+                      setCopySourceIndices([]);
+                      setCopyStatus(res.error || `Failed to load indices: HTTP ${res.status}`);
+                    }
+                  }
+                }}
+              >
+                🔄 Refresh Indices
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="row">
+          <div className="col">
+            <label>Target Connection</label>
+            <select value={copyTargetConnection} onChange={e => setCopyTargetConnection(e.target.value)}>
+              <option value="">Select target connection...</option>
+              {connections.map(c => (
+                <option key={c.id} value={c.id}>{c.name} ({c.url})</option>
+              ))}
+            </select>
+            <small style={{ color: '#666', fontSize: '0.85em', display: 'block', marginTop: '0.25em' }}>
+              {copySourceConnection && copyTargetConnection && copySourceConnection === copyTargetConnection 
+                ? '📌 Same cluster copy (within same environment)' 
+                : copySourceConnection && copyTargetConnection
+                ? '🌐 Cross-environment copy (different clusters)'
+                : 'Select both connections to see copy type'}
+            </small>
+          </div>
+          <div className="col">
+            <label>Target Index</label>
+            <input 
+              type="text" 
+              value={copyTargetIndex} 
+              onChange={e => setCopyTargetIndex(e.target.value)} 
+              placeholder="Enter target index name..."
+            />
+            <small style={{ color: '#666', fontSize: '0.85em', display: 'block', marginTop: '0.25em' }}>
+              Target index will be created if it doesn't exist
+            </small>
+          </div>
+        </div>
+
+        <div className="row">
+          <button 
+            disabled={!copySourceConnection || !copyTargetConnection || !copySourceIndex || !copyTargetIndex || copyInProgress}
+            onClick={async () => {
+              if (!copySourceConnection || !copyTargetConnection || !copySourceIndex || !copyTargetIndex) return;
+
+              const sourceConn = connections.find(c => c.id === copySourceConnection);
+              const targetConn = connections.find(c => c.id === copyTargetConnection);
+              
+              if (!sourceConn || !targetConn) {
+                setCopyStatus('Error: Invalid connection selection');
+                return;
+              }
+
+              setCopyInProgress(true);
+              setCopyStatus('Starting index copy...');
+              setCopyProgress({ total: 0, processed: 0, documentsCopied: 0 });
+              
+              const abortController = new AbortController();
+              setCopyAbortController(abortController);
+
+              try {
+                // Step 1: Fetch source mapping
+                setCopyStatus('Step 1/3: Fetching source index mapping...');
+                const mappingRes = await fetchMapping(sourceConn, copySourceIndex);
+                if (!mappingRes.ok || !mappingRes.json) {
+                  throw new Error(mappingRes.error || `Failed to fetch mapping: HTTP ${mappingRes.status}`);
+                }
+
+                const mappingJson = mappingRes.json as Record<string, any>;
+                const sourceMappings = mappingJson[copySourceIndex]?.mappings || mappingJson.mappings || {};
+                
+                // Step 2: Create target index with mapping (if needed)
+                setCopyStatus('Step 2/3: Creating target index with mapping...');
+                const createRes = await createIndexWithMapping(targetConn, copyTargetIndex, sourceMappings);
+                if (!createRes.ok && !(createRes.error || '').includes('resource_already_exists_exception')) {
+                  throw new Error(createRes.error || `Failed to create target index: HTTP ${createRes.status}`);
+                }
+
+                // Step 3: Scroll and copy all documents
+                setCopyStatus('Step 3/3: Copying documents...');
+                const scrollRes = await scrollAllDocuments(sourceConn, copySourceIndex, {
+                  signal: abortController.signal,
+                  batchSize: 1000,
+                  onProgress: (info: { total: number; processed: number }) => {
+                    setCopyProgress({ total: info.total, processed: info.processed, documentsCopied: info.processed });
+                    setCopyStatus(`Copying documents... ${info.processed}/${info.total} (${info.total > 0 ? ((info.processed / info.total) * 100).toFixed(1) : '0.0'}%)`);
+                  }
+                });
+
+                if (!scrollRes.ok || !scrollRes.documents) {
+                  throw new Error(scrollRes.error || 'Failed to scroll source documents');
+                }
+
+                const documents = scrollRes.documents;
+                setCopyStatus(`Copying ${documents.length} documents to target index...`);
+
+                // Prepare documents for bulk insert (preserve document sources)
+                const docsToInsert = documents.map((doc: { _source: Record<string, unknown> }) => doc._source);
+                
+                let succeeded = 0;
+                let failed = 0;
+                if (docsToInsert.length > 0) {
+                  const bulkRes = await bulkInsert(targetConn, copyTargetIndex, docsToInsert, 1000, {
+                    signal: abortController.signal,
+                    onProgress: (info) => {
+                      setCopyProgress({ total: info.total, processed: info.processed, documentsCopied: info.succeeded || 0 });
+                      setCopyStatus(`Copying documents... ${info.processed}/${info.total} (${info.total > 0 ? ((info.processed / info.total) * 100).toFixed(1) : '0.0'}%)`);
+                    }
+                  });
+
+                  if (!bulkRes.ok) {
+                    throw new Error(bulkRes.error || `Bulk insert failed: HTTP ${bulkRes.status}`);
+                  }
+
+                  succeeded = bulkRes.succeeded || 0;
+                  failed = bulkRes.failed || 0;
+                }
+
+                setCopyInProgress(false);
+                setCopyAbortController(null);
+                setCopyStatus(
+                  `✅ Copy complete!\n\n` +
+                  `📤 Source: ${copySourceIndex} (${sourceConn.name})\n` +
+                  `📥 Target: ${copyTargetIndex} (${targetConn.name})\n` +
+                  `📊 Documents: ${documents.length} total\n` +
+                  `✅ Succeeded: ${succeeded}\n` +
+                  `❌ Failed: ${failed}`
+                );
+                setCopyProgress({ total: documents.length, processed: documents.length, documentsCopied: succeeded });
+
+                logAudit('Copy Index', 'system', 
+                  `Copied index ${copySourceIndex} to ${copyTargetIndex} (${succeeded} succeeded, ${failed} failed)`, 
+                  failed > 0 ? 'warning' : 'success',
+                  { 
+                    sourceIndex: copySourceIndex, 
+                    targetIndex: copyTargetIndex,
+                    sourceConnection: sourceConn.name,
+                    targetConnection: targetConn.name,
+                    totalDocuments: documents.length,
+                    succeeded,
+                    failed
+                  }
+                );
+              } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : 'Unknown error';
+                setCopyInProgress(false);
+                setCopyAbortController(null);
+                setCopyStatus(`❌ Error: ${msg}`);
+                logAudit('Copy Index', 'system', `Failed to copy index: ${msg}`, 'error', { 
+                  sourceIndex: copySourceIndex, 
+                  targetIndex: copyTargetIndex 
+                });
+              }
+            }}
+          >
+            🚀 Start Copy
+          </button>
+          <button 
+            disabled={!copyInProgress}
+            onClick={() => {
+              copyAbortController?.abort();
+              setCopyInProgress(false);
+              setCopyAbortController(null);
+              setCopyStatus('⚠️ Copy cancelled by user');
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+
+        {copyInProgress && (
+          <div className="row">
+            <div className="col">
+              <div style={{ width: '100%', height: '8px', background: '#eee', borderRadius: '4px' }}>
+                <div style={{ 
+                  width: `${copyProgress.total > 0 ? (copyProgress.processed / copyProgress.total) * 100 : 0}%`, 
+                  height: '8px', 
+                  background: '#3b82f6', 
+                  borderRadius: '4px', 
+                  transition: 'width 0.3s' 
+                }} />
+              </div>
+              <p style={{ fontSize: '0.9em', color: '#9aa4b2', marginTop: '0.5em' }}>
+                {copyProgress.total > 0 
+                  ? `Progress: ${copyProgress.processed}/${copyProgress.total} documents (${copyProgress.total > 0 ? ((copyProgress.processed / copyProgress.total) * 100).toFixed(1) : '0.0'}%)`
+                  : 'Initializing...'}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <pre className="result">{copyStatus}</pre>
       </section>
       )}
 
